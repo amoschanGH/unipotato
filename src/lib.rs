@@ -1,8 +1,7 @@
-use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput};
+pub mod macros;
+pub mod route;
+pub mod server;
+pub mod handler;
 
-#[proc_macro_attribute]
-pub fn get(_attr: TokenStream, _item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(_item as DeriveInput);
-    quote::quote! { #input }.into()
-}
+pub use route::Route;
+pub use server::launch;
