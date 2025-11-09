@@ -2,5 +2,9 @@
 name = "unipotato"
 version = "0.1.0"
 edition = "2024"
+description = "A macro-based Rust backend framework for AI integration"
+authors = ["CHAN, Hin Chung <chanhinchung334@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/amoschanGH/unipotato"
 
 [dependencies]
