@@ -22,6 +22,7 @@ impl Server {
     }
 
     pub fn start(self) {
+        crate::banner::print_banner();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             log_info!("Starting Unipotato server...");
@@ -41,7 +42,7 @@ impl Server {
         
         // Debug: Print all registered routes
         let routes = collect_routes();
-        log_debug!("Registered {} routes:", routes.len());
+        log_info!("Registered {} routes:", routes.len());
         for route in &routes {
             log_debug!("  {} {}", route.method, route.path);
         }

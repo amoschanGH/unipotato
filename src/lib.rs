@@ -4,6 +4,7 @@ pub mod server;
 pub mod handler;
 pub mod logger;
 pub mod request;
+pub mod banner;
 
 pub use route::{Route, mount};
 pub use server::Server;
@@ -20,3 +21,7 @@ pub use unipotato_macros::{get, post, put, delete, patch};
 pub mod export {
     pub use ctor;
 }
+
+// pub fn banner() -> String {
+//     "unipotato".to_string()
+// }
