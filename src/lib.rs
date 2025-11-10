@@ -3,9 +3,11 @@ pub mod route;
 pub mod server;
 pub mod handler;
 pub mod logger;
+pub mod request;
 
 pub use route::{Route, mount};
 pub use server::Server;
+pub use request::{Query, Body};
 
 // Re-export common types so developers don't need to import from hyper
 pub type Request = hyper::Request<hyper::body::Incoming>;
