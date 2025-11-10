@@ -2,7 +2,7 @@ use hyper::{Request, Response, body::Incoming, service::service_fn};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use std::convert::Infallible;
-use crate::{route::collect_routes, handler::not_found};
+use crate::{route::collect_routes, handler::not_found, log_info, log_success, log_error, log_request, log_response};
 
 pub struct Server {
     port: u16,
@@ -21,12 +21,12 @@ impl Server {
     pub fn start(self) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            println!("Starting server...");
+            log_info!("Starting Unipotato server...");
             if let Err(e) = self.launch_internal().await {
-                eprintln!("Failed to start server: {}", e);
-                eprintln!("This might be because port {} is already in use.", self.port);
-                eprintln!("Try killing any existing processes on port {}:", self.port);
-                eprintln!("  lsof -ti:{} | xargs kill -9", self.port);
+                log_error!("Failed to start server: {}", e);
+                log_error!("This might be because port {} is already in use.", self.port);
+                log_info!("Try killing any existing processes on port {}:", self.port);
+                log_info!("  lsof -ti:{} | xargs kill -9", self.port);
                 std::process::exit(1);
             }
         });
@@ -35,7 +35,7 @@ impl Server {
     async fn launch_internal(&self) -> Result<(), Box<dyn std::error::Error>> {
         let addr = format!("0.0.0.0:{}", self.port);
         let listener = TcpListener::bind(&addr).await?;
-        println!("Unipotato listening on http://localhost:{}", self.port);
+        log_success!("Unipotato listening on http://localhost:{}", self.port);
         loop {
             let (stream, _) = listener.accept().await?;
             let io = TokioIo::new(stream);
@@ -45,7 +45,7 @@ impl Server {
                     .serve_connection(io, service)
                     .await 
                 {
-                    eprintln!("Error serving connection: {:?}", err);
+                    log_error!("Error serving connection: {:?}", err);
                 }
             });
         }
@@ -53,13 +53,24 @@ impl Server {
 }
 
 async fn router(req: Request<Incoming>) -> Result<Response<String>, Infallible> {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    
+    log_request!(method.as_str(), &path);
+    
     let routes = collect_routes();
     for route in routes {
         if req.method() == &route.method {
             if req.uri().path() == route.path.as_str() {
-                return Ok((route.handler)(req).await);
+                let response = (route.handler)(req).await;
+                let status = response.status().as_u16();
+                log_response!(status, &path);
+                return Ok(response);
             }
         }
     }
-    Ok(not_found())
+    
+    let response = not_found();
+    log_response!(404, &path);
+    Ok(response)
 }
