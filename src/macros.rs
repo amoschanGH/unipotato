@@ -1,5 +1,5 @@
 #[macro_export]
-macro_rules! register_get {
+macro_rules! get {
     ($path:expr, $handler:ident) => {
         {
             use std::sync::Arc;
@@ -13,7 +13,7 @@ macro_rules! register_get {
 }
 
 #[macro_export]
-macro_rules! register_post {
+macro_rules! post {
     ($path:expr, $handler:ident) => {
         {
             use std::sync::Arc;
@@ -22,6 +22,25 @@ macro_rules! register_post {
                 Box::pin($handler(req)) as std::pin::Pin<Box<dyn std::future::Future<Output = Response<String>> + Send>>
             });
             $crate::Route::new(Method::POST, $path, handler_arc);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! launch {
+    () => {
+        {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                println!("Starting server...");
+                if let Err(e) = $crate::server::launch().await {
+                    eprintln!("Failed to start server: {}", e);
+                    eprintln!("This might be because port 8000 is already in use.");
+                    eprintln!("Try killing any existing processes on port 8000:");
+                    eprintln!("  lsof -ti:8000 | xargs kill -9");
+                    std::process::exit(1);
+                }
+            });
         }
     };
 }
