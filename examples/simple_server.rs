@@ -1,4 +1,4 @@
-use unipotato::{Request, Response, handler::{html, json}, get, post, routes, launch};
+use unipotato::{Request, Response, handler::{html, json}, Server, get, post};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -14,18 +14,22 @@ struct ApiResponse {
     message: String,
 }
 
+#[get("/")]
 async fn index(_req: Request) -> Response {
     html("<h1>Welcome to Unipotato!</h1><p>Check out <a href='/about'>About</a> or <a href='/api/users'>Users API</a></p>")
 }
 
+#[get("/about")]
 async fn about(_req: Request) -> Response {
     html("<h1>About</h1><p>This is a simple web framework built with Rust</p>")
 }
 
+#[get("/contact")]
 async fn contact(_req: Request) -> Response {
     html("<h1>Contact Us</h1><form method='post' action='/api/contact'><input name='email' placeholder='Your email'/><button>Submit</button></form>")
 }
 
+#[get("/api/users")]
 async fn get_users(_req: Request) -> Response {
     let users = vec![
         User { id: 1, name: "Alice".to_string(), email: "alice@example.com".to_string() },
@@ -35,6 +39,7 @@ async fn get_users(_req: Request) -> Response {
     json(users)
 }
 
+#[get("/api/users/1")]
 async fn get_user(_req: Request) -> Response {
     let user = User {
         id: 1,
@@ -44,6 +49,7 @@ async fn get_user(_req: Request) -> Response {
     json(user)
 }
 
+#[post("/api/users")]
 async fn create_user(_req: Request) -> Response {
     let response = ApiResponse {
         status: "success".to_string(),
@@ -52,6 +58,7 @@ async fn create_user(_req: Request) -> Response {
     json(response)
 }
 
+#[post("/api/contact")]
 async fn contact_form(_req: Request) -> Response {
     let response = ApiResponse {
         status: "success".to_string(),
@@ -60,6 +67,7 @@ async fn contact_form(_req: Request) -> Response {
     json(response)
 }
 
+#[post("/api/users/1")]
 async fn update_user(_req: Request) -> Response {
     let response = ApiResponse {
         status: "success".to_string(),
@@ -68,14 +76,16 @@ async fn update_user(_req: Request) -> Response {
     json(response)
 }
 
-async fn delete_user(_req: Request) -> Response {
-    let response = ApiResponse {
-        status: "success".to_string(),
-        message: "User deleted successfully".to_string(),
-    };
-    json(response)
-}
+// #[delete("/api/users/1")]
+// async fn delete_user(_req: Request) -> Response {
+//     let response = ApiResponse {
+//         status: "success".to_string(),
+//         message: "User deleted successfully".to_string(),
+//     };
+//     json(response)
+// }
 
+#[get("/api/health")]
 async fn health_check(_req: Request) -> Response {
     json(ApiResponse {
         status: "ok".to_string(),
@@ -84,24 +94,5 @@ async fn health_check(_req: Request) -> Response {
 }
 
 fn main() {
-    launch!(8000)
-        .mount("/", || {
-            routes![
-                get("/", index),
-                get("/about", about),
-                get("/contact", contact),
-            ];
-        })
-        .mount("/api", || {
-            routes![
-                get("/users", get_users),
-                get("/users/1", get_user),
-                post("/users", create_user),
-                post("/users/1", update_user),
-                post("/users/1/delete", delete_user),
-                post("/contact", contact_form),
-                get("/health", health_check),
-            ];
-        })
-        .start();
+    Server::new(8000).start();
 }

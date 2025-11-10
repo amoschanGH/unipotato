@@ -1,6 +1,6 @@
 use hyper::{Request, Response, Method, body::Incoming};
 use std::sync::{Arc, Mutex};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 
 pub type Handler = Arc<dyn Fn(Request<Incoming>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response<String>> + Send>> + Send + Sync>;
 
@@ -20,9 +20,7 @@ impl Clone for Route {
     }
 }
 
-lazy_static! {
-    static ref ROUTES: Mutex<Vec<Route>> = Mutex::new(Vec::new());
-}
+static ROUTES: Lazy<Mutex<Vec<Route>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 impl Route {
     pub fn new(method: Method, path: impl Into<String>, handler: Handler) {
@@ -38,17 +36,14 @@ impl Route {
 }
 
 pub fn mount(base: &str, routes_fn: impl FnOnce()) {
-    // Store the current base path for nested routes
     let base = base.trim_end_matches('/');
     
-    // Execute the routes registration with context
     MOUNT_BASE.with(|mb| {
         *mb.borrow_mut() = base.to_string();
     });
     
     routes_fn();
     
-    // Clear the base path after registration
     MOUNT_BASE.with(|mb| {
         mb.borrow_mut().clear();
     });
@@ -66,4 +61,19 @@ pub fn collect_routes() -> Vec<Route> {
     ROUTES.lock().unwrap_or_else(|_| {
         panic!("Failed to lock ROUTES mutex")
     }).clone()
+}
+
+pub fn register_route(method: Method, path: String, handler: Handler) {
+    let base = get_mount_base();
+    let full_path = if base.is_empty() {
+        path
+    } else {
+        format!("{}{}", base, path)
+    };
+    
+    ROUTES.lock().unwrap().push(Route {
+        method,
+        path: full_path,
+        handler,
+    });
 }
