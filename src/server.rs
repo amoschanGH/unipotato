@@ -2,7 +2,7 @@ use hyper::{Request, Response, body::Incoming, service::service_fn};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use std::convert::Infallible;
-use crate::{route::collect_routes, handler::not_found, log_info, log_success, log_error, log_request, log_response};
+use crate::{handler::not_found, log_debug, log_error, log_info, log_request, log_response, log_success, route::collect_routes};
 
 pub struct Server {
     port: u16,
@@ -41,9 +41,9 @@ impl Server {
         
         // Debug: Print all registered routes
         let routes = collect_routes();
-        log_info!("Registered {} routes:", routes.len());
+        log_debug!("Registered {} routes:", routes.len());
         for route in &routes {
-            log_info!("  {} {}", route.method, route.path);
+            log_debug!("  {} {}", route.method, route.path);
         }
         
         log_success!("Unipotato listening on http://localhost:{}", self.port);
