@@ -13,7 +13,10 @@ impl Server {
         Self { port }
     }
 
-    pub fn mount(self, base: &str, routes_fn: impl FnOnce()) -> Self {
+    pub fn mount<F>(self, base: &str, routes_fn: F) -> Self 
+    where 
+        F: FnOnce()
+    {
         crate::route::mount(base, routes_fn);
         self
     }
@@ -35,6 +38,14 @@ impl Server {
     async fn launch_internal(&self) -> Result<(), Box<dyn std::error::Error>> {
         let addr = format!("0.0.0.0:{}", self.port);
         let listener = TcpListener::bind(&addr).await?;
+        
+        // Debug: Print all registered routes
+        let routes = collect_routes();
+        log_info!("Registered {} routes:", routes.len());
+        for route in &routes {
+            log_info!("  {} {}", route.method, route.path);
+        }
+        
         log_success!("Unipotato listening on http://localhost:{}", self.port);
         loop {
             let (stream, _) = listener.accept().await?;

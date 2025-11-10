@@ -21,6 +21,7 @@ impl Clone for Route {
 }
 
 static ROUTES: Lazy<Mutex<Vec<Route>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static MOUNT_CONFIGS: Lazy<Mutex<Vec<(String, Box<dyn FnOnce() + Send>)>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 impl Route {
     pub fn new(method: Method, path: impl Into<String>, handler: Handler) {
@@ -35,8 +36,28 @@ impl Route {
     }
 }
 
+pub fn store_mount_config(base: String, routes_fn: Box<dyn FnOnce() + Send>) {
+    if let Ok(mut configs) = MOUNT_CONFIGS.lock() {
+        configs.push((base, routes_fn));
+    }
+}
+
+pub fn apply_mount_configs() {
+    let configs = {
+        let mut mount_configs = MOUNT_CONFIGS.lock().unwrap();
+        std::mem::take(&mut *mount_configs)
+    };
+    
+    for (base, routes_fn) in configs {
+        mount(&base, routes_fn);
+    }
+}
+
 pub fn mount(base: &str, routes_fn: impl FnOnce()) {
     let base = base.trim_end_matches('/');
+    
+    // Store current routes count
+    let routes_before = ROUTES.lock().unwrap().len();
     
     MOUNT_BASE.with(|mb| {
         *mb.borrow_mut() = base.to_string();
@@ -47,6 +68,14 @@ pub fn mount(base: &str, routes_fn: impl FnOnce()) {
     MOUNT_BASE.with(|mb| {
         mb.borrow_mut().clear();
     });
+    
+    // Update paths of newly added routes
+    let mut routes = ROUTES.lock().unwrap();
+    for i in routes_before..routes.len() {
+        if !routes[i].path.starts_with(base) && !base.is_empty() {
+            routes[i].path = format!("{}{}", base, routes[i].path);
+        }
+    }
 }
 
 thread_local! {
