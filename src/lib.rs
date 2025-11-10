@@ -4,4 +4,4 @@ pub mod server;
 pub mod handler;
 
 pub use route::{Route, mount};
-pub use server::launch;
+pub use server::Server;

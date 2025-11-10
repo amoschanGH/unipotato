@@ -51,19 +51,10 @@ macro_rules! routes {
 
 #[macro_export]
 macro_rules! launch {
+    ($port:expr) => {
+        $crate::Server::new($port)
+    };
     () => {
-        {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                println!("Starting server...");
-                if let Err(e) = $crate::server::launch().await {
-                    eprintln!("Failed to start server: {}", e);
-                    eprintln!("This might be because port 8000 is already in use.");
-                    eprintln!("Try killing any existing processes on port 8000:");
-                    eprintln!("  lsof -ti:8000 | xargs kill -9");
-                    std::process::exit(1);
-                }
-            });
-        }
+        $crate::Server::new(8000)
     };
 }
