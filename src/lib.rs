@@ -21,7 +21,3 @@ pub use unipotato_macros::{get, post, put, delete, patch};
 pub mod export {
     pub use ctor;
 }
-
-// pub fn banner() -> String {
-//     "unipotato".to_string()
-// }
