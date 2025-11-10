@@ -9,13 +9,13 @@ use crate::{
 };
 
 /// Main server struct that handles HTTP requests
-pub struct Server {
+pub struct Unipotato {
     port: u16,
 }
 
-impl Server {
+impl Unipotato {
     /// Create a new server instance
-    pub fn new(port: u16) -> Self {
+    pub fn launch(port: u16) -> Self {
         Self { port }
     }
 

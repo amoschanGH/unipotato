@@ -29,8 +29,8 @@ impl Clone for Route {
 /// Global storage for registered routes
 static ROUTES: Lazy<Mutex<Vec<Route>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-/// Thread-local storage for mount base path
 thread_local! {
+    /// Thread-local storage for mount base path
     static MOUNT_BASE: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
 }
 

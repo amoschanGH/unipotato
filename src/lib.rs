@@ -7,7 +7,7 @@ pub mod request;
 pub mod banner;
 
 pub use route::{Route, mount};
-pub use server::Server;
+pub use server::Unipotato;
 pub use request::{Query, Body};
 
 // Re-export common types so developers don't need to import from hyper

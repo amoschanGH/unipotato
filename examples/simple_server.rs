@@ -1,4 +1,4 @@
-use unipotato::{Request, Response, handler::{html, json}, Server, get, post, routes, Query, Body};
+use unipotato::{Request, Response, handler::{html, json}, Unipotato, get, post, routes, Query, Body};
 use serde::{Serialize, Deserialize};
 
 // === Data Models ===
@@ -172,7 +172,7 @@ mod api_routes {
 // === Main ===
 
 fn main() {
-    Server::new(8000)
+    Unipotato::launch(8000)
         .mount("/", routes![
             root_routes::index,
             root_routes::about,
