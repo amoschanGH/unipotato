@@ -1,6 +1,8 @@
 use unipotato::{Request, Response, handler::{html, json}, Server, get, post, routes, Query, Body};
 use serde::{Serialize, Deserialize};
 
+// === Data Models ===
+
 #[derive(Serialize)]
 struct User {
     id: u32,
@@ -26,7 +28,26 @@ struct ContactFormData {
     message: Option<String>,
 }
 
-// Root routes module
+// === Helper Functions ===
+
+impl ApiResponse {
+    fn success(message: impl Into<String>) -> Self {
+        Self {
+            status: "success".to_string(),
+            message: message.into(),
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            status: "error".to_string(),
+            message: message.into(),
+        }
+    }
+}
+
+// === Root Routes ===
+
 mod root_routes {
     use super::*;
     
@@ -46,28 +67,22 @@ mod root_routes {
     }
 }
 
-// API routes module
+// === API Routes ===
+
 mod api_routes {
     use super::*;
     
     #[get("/users")]
     pub async fn get_users(req: Request) -> Response {
-        // Extract query parameters
         let query = Query::from_uri(req.uri());
-        
-        // Example: /api/users?limit=2
         let limit = query.get("limit")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(10);
         
-        let mut users = vec![
-            User { id: 1, name: "Alice".to_string(), email: "alice@example.com".to_string() },
-            User { id: 2, name: "Bob".to_string(), email: "bob@example.com".to_string() },
-            User { id: 3, name: "Charlie".to_string(), email: "charlie@example.com".to_string() },
-        ];
+        let users = get_mock_users();
+        let limited_users: Vec<_> = users.into_iter().take(limit).collect();
         
-        users.truncate(limit);
-        json(users)
+        json(limited_users)
     }
 
     #[get("/users/1")]
@@ -82,88 +97,37 @@ mod api_routes {
 
     #[post("/users")]
     pub async fn create_user(req: Request) -> Response {
-        // Extract and parse JSON body
-        match Body::from_incoming(req.into_body()).await {
-            Ok(body) => {
-                match body.json::<CreateUserRequest>() {
-                    Ok(user_data) => {
-                        let response = ApiResponse {
-                            status: "success".to_string(),
-                            message: format!("User {} created successfully", user_data.name),
-                        };
-                        json(response)
-                    }
-                    Err(e) => {
-                        let response = ApiResponse {
-                            status: "error".to_string(),
-                            message: format!("Invalid JSON: {}", e),
-                        };
-                        json(response)
-                    }
-                }
-            }
-            Err(e) => {
-                let response = ApiResponse {
-                    status: "error".to_string(),
-                    message: format!("Failed to read body: {}", e),
-                };
+        match parse_user_request(req).await {
+            Ok(user_data) => {
+                let response = ApiResponse::success(
+                    format!("User {} created successfully", user_data.name)
+                );
                 json(response)
+            }
+            Err(error_msg) => {
+                json(ApiResponse::error(error_msg))
             }
         }
     }
 
     #[post("/contact")]
     pub async fn contact_form(req: Request) -> Response {
-        // Parse form data
-        match Body::from_incoming(req.into_body()).await {
-            Ok(body) => {
-                match body.json::<ContactFormData>() {
-                    Ok(form_data) => {
-                        let response = ApiResponse {
-                            status: "success".to_string(),
-                            message: format!("Thank you {}! We'll contact you soon.", form_data.email),
-                        };
-                        json(response)
-                    }
-                    Err(_) => {
-                        // Try parsing as form data
-                        match body.form() {
-                            Ok(form) => {
-                                let email = form.get("email").cloned().unwrap_or_default();
-                                let response = ApiResponse {
-                                    status: "success".to_string(),
-                                    message: format!("Thank you {}! We'll contact you soon.", email),
-                                };
-                                json(response)
-                            }
-                            Err(e) => {
-                                let response = ApiResponse {
-                                    status: "error".to_string(),
-                                    message: format!("Invalid form data: {}", e),
-                                };
-                                json(response)
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                let response = ApiResponse {
-                    status: "error".to_string(),
-                    message: format!("Failed to read body: {}", e),
-                };
+        match parse_contact_form(req).await {
+            Ok(email) => {
+                let response = ApiResponse::success(
+                    format!("Thank you {}! We'll contact you soon.", email)
+                );
                 json(response)
+            }
+            Err(error_msg) => {
+                json(ApiResponse::error(error_msg))
             }
         }
     }
 
     #[post("/users/1")]
     pub async fn update_user(_req: Request) -> Response {
-        let response = ApiResponse {
-            status: "success".to_string(),
-            message: "User updated successfully".to_string(),
-        };
-        json(response)
+        json(ApiResponse::success("User updated successfully"))
     }
 
     #[get("/health")]
@@ -173,7 +137,39 @@ mod api_routes {
             message: "Server is running".to_string(),
         })
     }
+
+    // === Helper Functions ===
+
+    fn get_mock_users() -> Vec<User> {
+        vec![
+            User { id: 1, name: "Alice".to_string(), email: "alice@example.com".to_string() },
+            User { id: 2, name: "Bob".to_string(), email: "bob@example.com".to_string() },
+            User { id: 3, name: "Charlie".to_string(), email: "charlie@example.com".to_string() },
+        ]
+    }
+
+    async fn parse_user_request(req: Request) -> Result<CreateUserRequest, String> {
+        let body = Body::from_incoming(req.into_body()).await?;
+        body.json::<CreateUserRequest>()
+    }
+
+    async fn parse_contact_form(req: Request) -> Result<String, String> {
+        let body = Body::from_incoming(req.into_body()).await?;
+        
+        // Try JSON first
+        if let Ok(form_data) = body.json::<ContactFormData>() {
+            return Ok(form_data.email);
+        }
+        
+        // Fallback to form data
+        let form = body.form()?;
+        form.get("email")
+            .cloned()
+            .ok_or_else(|| "Email field is required".to_string())
+    }
 }
+
+// === Main ===
 
 fn main() {
     Server::new(8000)
