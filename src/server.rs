@@ -19,14 +19,6 @@ impl Unipotato {
         Self { port }
     }
 
-    /// Mount routes under a specific base path
-    /// 
-    /// # Example
-    /// ```
-    /// Server::new(8000)
-    ///     .mount("/api", routes![...])
-    ///     .mount("/admin", routes![...])
-    /// ```
     pub fn mount<F>(self, base: &str, routes_fn: F) -> Self 
     where 
         F: FnOnce()
