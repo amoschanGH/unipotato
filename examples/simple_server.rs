@@ -1,11 +1,10 @@
-use unipotato::{handler::html, get, routes, launch};
-use hyper::{Request, Response, body::Incoming};
+use unipotato::{Request, Response, handler::html, get, routes, launch};
 
-async fn index(_req: Request<Incoming>) -> Response<String> {
+async fn index(_req: Request) -> Response {
     html("Hello from Unipotato!")
 }
 
-async fn about(_req: Request<Incoming>) -> Response<String> {
+async fn about(_req: Request) -> Response {
     html("<h1>About</h1>")
 }
 
