@@ -6,7 +6,7 @@ pub mod logger;
 pub mod request;
 pub mod banner;
 
-pub use route::{Route, mount, register_route};
+pub use route::{Route, mount, register_route, Router, Handler, collect_routes};
 pub use server::Unipotato;
 pub use request::{Query, Body};
 
