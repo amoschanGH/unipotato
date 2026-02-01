@@ -172,7 +172,7 @@ mod api_routes {
 // === Main ===
 
 fn main() {
-    Unipotato::launch(8000)
+    Unipotato::launch(8080)
         .mount("/", routes![
             root_routes::index,
             root_routes::about,
