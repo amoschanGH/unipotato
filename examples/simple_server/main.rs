@@ -3,13 +3,9 @@ mod database;
 mod routes;
 pub mod handlers;
 
-use unipotato::{Unipotato, routes};
+use unipotato::Unipotato;
 use database::Database;
 use std::sync::{Arc, Mutex, OnceLock};
-
-// Import handlers directly
-use handlers::root;
-use handlers::api;
 
 static DB: OnceLock<Arc<Mutex<Database>>> = OnceLock::new();
 
@@ -27,23 +23,6 @@ fn main() {
     let db = Arc::new(Mutex::new(Database::load()));
     DB.set(db).expect("Failed to initialize database");
 
-    Unipotato::launch(8000)
-        .mount("/", routes![
-            root::index,
-            root::about,
-        ])
-        .mount("/api", routes![
-            api::get_users,
-            api::get_user,
-            api::create_user,
-            api::update_user,
-            api::delete_user,
-            api::health_check,
-            api::slow_endpoint,
-            // Multi-param examples
-            api::get_user_post,
-            api::get_post_comment,
-            api::get_product_by_category,
-        ])
-        .start();
+    let app = Unipotato::launch(8000);
+    routes::setup_routes(app).start();
 }
