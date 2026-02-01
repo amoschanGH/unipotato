@@ -6,12 +6,11 @@ pub mod logger;
 pub mod request;
 pub mod banner;
 
-pub use route::{Route, mount, register_route, Router, Handler, collect_routes};
+pub use route::{Route, mount, register_route, Router, Handler, collect_routes, find_handler_with_params, HandlerMatch};
 pub use server::Unipotato;
-pub use request::{Query, Body};
+pub use request::{Query, Body, Request};
 
-// Re-export common types so developers don't need to import from hyper
-pub type Request = hyper::Request<hyper::body::Incoming>;
+// Re-export Response type
 pub type Response = hyper::Response<String>;
 
 // Re-export the proc-macro attributes

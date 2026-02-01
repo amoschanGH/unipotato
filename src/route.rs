@@ -1,11 +1,11 @@
-use hyper::{Request, Response, Method, body::Incoming, StatusCode};
+use hyper::{Response, Method, body::Incoming, StatusCode};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::collections::HashMap;
 use regex::Regex;
 
-/// Type alias for async request handlers
+/// Type alias for async request handlers - now uses crate::request::Request
 pub type Handler = Arc<
-    dyn Fn(crate::Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Response> + Send>> 
+    dyn Fn(crate::request::Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Response> + Send>> 
     + Send 
     + Sync
 >;
@@ -24,6 +24,7 @@ struct RouteInfo {
     method: Method,
     original_path: String,
     pattern: Regex,
+    param_names: Vec<String>,  // Store parameter names like ["id", "post_id"]
     handler: Handler,
 }
 
@@ -39,6 +40,28 @@ thread_local! {
     static MOUNT_BASE: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
 }
 
+/// Extract parameter names from a path pattern like "/users/<id>/posts/<post_id>"
+fn extract_param_names(path: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut chars = path.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            let mut name = String::new();
+            while let Some(inner) = chars.next() {
+                if inner == '>' {
+                    break;
+                }
+                name.push(inner);
+            }
+            if !name.is_empty() {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
 /// Register a new route with pattern matching support
 pub fn register_route(method: Method, original_path: String, pattern: String, handler: Handler) {
     let base = get_mount_base();
@@ -49,27 +72,75 @@ pub fn register_route(method: Method, original_path: String, pattern: String, ha
         format!("^{}{}$", regex::escape(&base), pattern.trim_start_matches('^').trim_end_matches('$'))
     };
     
+    // Extract parameter names from the original path
+    let param_names = extract_param_names(&full_path);
+    
     let mut routes = get_routes().lock().unwrap();
     let route_info = RouteInfo {
         method: method.clone(),
         original_path: full_path,
         pattern: Regex::new(&full_pattern).expect("Invalid route pattern"),
+        param_names,
         handler,
     };
     routes.entry(method).or_insert_with(Vec::new).push(route_info);
 }
 
-/// Find a handler for the given method and path
-pub fn find_handler(method: &Method, path: &str) -> Option<Handler> {
+/// Result of finding a handler - includes the handler and extracted parameters
+pub struct HandlerMatch {
+    pub handler: Handler,
+    pub params: HashMap<String, String>,
+}
+
+/// Find a handler for the given method and path, extracting parameters
+pub fn find_handler_with_params(method: &Method, path: &str) -> Option<HandlerMatch> {
     let routes = get_routes().lock().unwrap();
     if let Some(method_routes) = routes.get(method) {
         for route_info in method_routes {
-            if route_info.pattern.is_match(path) {
-                return Some(route_info.handler.clone());
+            if let Some(_captures) = route_info.pattern.captures(path) {
+                // Extract parameter values
+                let mut params = HashMap::new();
+                
+                // The captures include the full match at index 0, then each group
+                // But our pattern uses [^/]+ which doesn't create capture groups
+                // We need to use a different approach - match segments
+                let param_values = extract_param_values(&route_info.original_path, path);
+                
+                for (i, name) in route_info.param_names.iter().enumerate() {
+                    if let Some(value) = param_values.get(i) {
+                        params.insert(name.clone(), value.clone());
+                    }
+                }
+                
+                return Some(HandlerMatch {
+                    handler: route_info.handler.clone(),
+                    params,
+                });
             }
         }
     }
     None
+}
+
+/// Extract parameter values by comparing the route pattern with the actual path
+fn extract_param_values(route_path: &str, actual_path: &str) -> Vec<String> {
+    let route_segments: Vec<&str> = route_path.split('/').collect();
+    let actual_segments: Vec<&str> = actual_path.split('/').collect();
+    
+    let mut values = Vec::new();
+    
+    for (route_seg, actual_seg) in route_segments.iter().zip(actual_segments.iter()) {
+        if route_seg.starts_with('<') && route_seg.ends_with('>') {
+            values.push(actual_seg.to_string());
+        }
+    }
+    
+    values
+}
+
+/// Find a handler for the given method and path (legacy, without params)
+pub fn find_handler(method: &Method, path: &str) -> Option<Handler> {
+    find_handler_with_params(method, path).map(|m| m.handler)
 }
 
 /// Mount routes under a base path
@@ -137,16 +208,15 @@ impl Router {
     }
     
     /// Route an incoming request to the appropriate handler
-    pub async fn route(&self, req: Request<Incoming>) -> Response<String> {
+    pub async fn route(&self, req: hyper::Request<Incoming>) -> Response<String> {
         let method = req.method().clone();
         let path = req.uri().path().to_string();
         
-        // Find matching route using regex patterns
-        if let Some(handler) = find_handler(&method, &path) {
-            // Convert Request<Incoming> to crate::Request
-            let (parts, body) = req.into_parts();
-            let req = Request::from_parts(parts, body);
-            return handler(req).await;
+        // Find matching route using regex patterns with param extraction
+        if let Some(HandlerMatch { handler, params }) = find_handler_with_params(&method, &path) {
+            // Create our custom Request with extracted path parameters
+            let custom_req = crate::request::Request::with_params(req, params);
+            return handler(custom_req).await;
         }
         
         // No route found - return 404

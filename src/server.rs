@@ -1,10 +1,11 @@
-use hyper::{Request, Response, body::Incoming, service::service_fn};
+use hyper::{Response, body::Incoming, service::service_fn};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use std::convert::Infallible;
 use crate::{
     handler::not_found, 
-    route::{collect_routes, find_handler},
+    route::{collect_routes, find_handler_with_params, HandlerMatch},
+    request::Request,
     log_debug, log_error, log_info, log_request, log_response, log_success,
 };
 
@@ -95,14 +96,18 @@ impl Unipotato {
 }
 
 /// Route incoming requests to registered handlers
-async fn router(req: Request<Incoming>) -> Result<Response<String>, Infallible> {
+async fn router(req: hyper::Request<Incoming>) -> Result<Response<String>, Infallible> {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     
     log_request!(method.as_str(), &path);
     
-    let response = match find_matching_route(&req) {
-        Some(handler) => handler(req).await,
+    let response = match find_handler_with_params(&method, &path) {
+        Some(HandlerMatch { handler, params }) => {
+            // Create our custom Request with extracted path parameters
+            let custom_req = Request::with_params(req, params);
+            handler(custom_req).await
+        }
         None => not_found(),
     };
     
@@ -110,13 +115,4 @@ async fn router(req: Request<Incoming>) -> Result<Response<String>, Infallible> 
     log_response!(status, &path);
     
     Ok(response)
-}
-
-/// Find a route handler that matches the request
-fn find_matching_route(req: &Request<Incoming>) -> Option<crate::route::Handler> {
-    let method = req.method();
-    let path = req.uri().path();
-    
-    // Use regex-based pattern matching from route module
-    find_handler(method, path)
 }
