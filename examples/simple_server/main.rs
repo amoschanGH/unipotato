@@ -40,6 +40,10 @@ fn main() {
             api::delete_user,
             api::health_check,
             api::slow_endpoint,
+            // Multi-param examples
+            api::get_user_post,
+            api::get_post_comment,
+            api::get_product_by_category,
         ])
         .start();
 }

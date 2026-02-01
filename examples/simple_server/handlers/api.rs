@@ -99,3 +99,59 @@ pub async fn slow_endpoint(_req: Request) -> Response {
     json(ApiResponse::success("Slow response after 3 seconds".to_string()))
 }
 
+// ============================================================
+// Examples with multiple path parameters
+// ============================================================
+
+/// Get a specific post by a specific user
+/// Example: GET /users/1/posts/42
+#[get("/users/<user_id>/posts/<post_id>")]
+pub async fn get_user_post(req: Request) -> Response {
+    let user_id: u32 = req.param_as("user_id").unwrap_or(0);
+    let post_id: u32 = req.param_as("post_id").unwrap_or(0);
+    
+    log_info!("Fetching post {} for user {}", post_id, user_id);
+    
+    json(serde_json::json!({
+        "user_id": user_id,
+        "post_id": post_id,
+        "title": format!("Post {} by User {}", post_id, user_id),
+        "content": "This is a sample post content"
+    }))
+}
+
+/// Get a specific comment on a post by a user
+/// Example: GET /users/1/posts/42/comments/5
+#[get("/users/<user_id>/posts/<post_id>/comments/<comment_id>")]
+pub async fn get_post_comment(req: Request) -> Response {
+    let user_id: u32 = req.param_as("user_id").unwrap_or(0);
+    let post_id: u32 = req.param_as("post_id").unwrap_or(0);
+    let comment_id: u32 = req.param_as("comment_id").unwrap_or(0);
+    
+    log_info!("Fetching comment {} on post {} by user {}", comment_id, post_id, user_id);
+    
+    json(serde_json::json!({
+        "user_id": user_id,
+        "post_id": post_id,
+        "comment_id": comment_id,
+        "text": format!("Comment {} on post {} by user {}", comment_id, post_id, user_id)
+    }))
+}
+
+/// Example with string parameters (not just numbers)
+/// Example: GET /categories/electronics/products/laptop-pro
+#[get("/categories/<category>/products/<product_slug>")]
+pub async fn get_product_by_category(req: Request) -> Response {
+    let category = req.param("category").unwrap_or("unknown");
+    let product_slug = req.param("product_slug").unwrap_or("unknown");
+    
+    log_info!("Fetching product '{}' in category '{}'", product_slug, category);
+    
+    json(serde_json::json!({
+        "category": category,
+        "product_slug": product_slug,
+        "name": product_slug.replace("-", " "),
+        "in_stock": true
+    }))
+}
+

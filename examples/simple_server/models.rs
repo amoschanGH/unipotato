@@ -34,9 +34,3 @@ pub struct CreateUserRequest {
     pub name: String,
     pub email: String,
 }
-
-#[derive(Deserialize)]
-pub struct ContactFormData {
-    pub email: String,
-    pub message: Option<String>,
-}
