@@ -1,4 +1,4 @@
-use unipotato::{Request, Response, handler::json, get, post, put, delete};
+use unipotato::{Request, Response, handler::json, get, post, put, delete, log_info};
 use crate::models::{User, ApiResponse};
 use crate::handlers::utils::{extract_id, parse_user_request};
 use crate::get_db;
@@ -7,14 +7,16 @@ use crate::get_db;
 pub async fn get_users(_req: Request) -> Response {
     let db = get_db();
     let data = db.lock().unwrap();
+    log_info!("Fetching all users");
     json(data.users.clone())
 }
 
-#[get("/users/:id")]
+#[get("/users/<id>")]
 pub async fn get_user(req: Request) -> Response {
     let db = get_db();
     let data = db.lock().unwrap();
     let id = extract_id(&req);
+    log_info!("Fetching user with id: {}", id);
     
     match data.users.iter().find(|u| u.id == id) {
         Some(user) => json(user.clone()),
@@ -42,7 +44,7 @@ pub async fn create_user(req: Request) -> Response {
     }
 }
 
-#[put("/users/:id")]
+#[put("/users/<id>")]
 pub async fn update_user(req: Request) -> Response {
     let db = get_db();
     let id = extract_id(&req);
@@ -63,7 +65,7 @@ pub async fn update_user(req: Request) -> Response {
     }
 }
 
-#[delete("/users/:id")]
+#[delete("/users/<id>")]
 pub async fn delete_user(req: Request) -> Response {
     let db = get_db();
     let id = extract_id(&req);
