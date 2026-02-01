@@ -1,33 +1,31 @@
 use hyper::{Request, Response, Method, body::Incoming};
-use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::pin::Pin;
+use std::future::Future;
 
 /// Type alias for async request handlers
 pub type Handler = Arc<
-    dyn Fn(Request<Incoming>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response<String>> + Send>> 
+    dyn Fn(Request<Incoming>) -> Pin<Box<dyn Future<Output = Response<String>> + Send>> 
     + Send 
     + Sync
 >;
 
+// Alias for macro compatibility
+pub type RouteHandler = Handler;
+
 /// Represents a single route with method, path, and handler
+#[derive(Clone)]
 pub struct Route {
     pub method: Method,
     pub path: String,
     pub handler: Handler,
 }
 
-impl Clone for Route {
-    fn clone(&self) -> Self {
-        Self {
-            method: self.method.clone(),
-            path: self.path.clone(),
-            handler: Arc::clone(&self.handler),
-        }
-    }
-}
-
 /// Global storage for registered routes
-static ROUTES: Lazy<Mutex<Vec<Route>>> = Lazy::new(|| Mutex::new(Vec::new()));
+fn routes_storage() -> &'static Mutex<Vec<Route>> {
+    static ROUTES: OnceLock<Mutex<Vec<Route>>> = OnceLock::new();
+    ROUTES.get_or_init(|| Mutex::new(Vec::new()))
+}
 
 thread_local! {
     /// Thread-local storage for mount base path
@@ -43,7 +41,7 @@ impl Route {
             handler 
         };
         
-        if let Ok(mut routes) = ROUTES.lock() {
+        if let Ok(mut routes) = routes_storage().lock() {
             routes.push(route);
         }
     }
@@ -75,7 +73,7 @@ pub fn register_route(method: Method, path: String, handler: Handler) {
     let base = get_mount_base();
     let full_path = build_full_path(&base, &path);
     
-    ROUTES.lock().unwrap().push(Route {
+    routes_storage().lock().unwrap().push(Route {
         method,
         path: full_path,
         handler,
@@ -84,7 +82,7 @@ pub fn register_route(method: Method, path: String, handler: Handler) {
 
 /// Collect all registered routes
 pub fn collect_routes() -> Vec<Route> {
-    ROUTES.lock()
+    routes_storage().lock()
         .unwrap_or_else(|_| panic!("Failed to lock ROUTES mutex"))
         .clone()
 }
@@ -92,7 +90,7 @@ pub fn collect_routes() -> Vec<Route> {
 // === Private Helper Functions ===
 
 fn count_routes() -> usize {
-    ROUTES.lock().unwrap().len()
+    routes_storage().lock().unwrap().len()
 }
 
 fn set_mount_base(base: &str) {
@@ -120,7 +118,7 @@ fn apply_base_to_new_routes(base: &str, routes_before: usize) {
         return;
     }
     
-    let mut routes = ROUTES.lock().unwrap();
+    let mut routes = routes_storage().lock().unwrap();
     for i in routes_before..routes.len() {
         if !routes[i].path.starts_with(base) {
             routes[i].path = format!("{}{}", base, routes[i].path);
