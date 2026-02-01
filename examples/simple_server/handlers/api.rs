@@ -46,10 +46,10 @@ pub async fn create_user(req: Request) -> Response {
     }
 }
 
-#[put("/users/<ouob>")]
+#[put("/users/<id>")]
 pub async fn update_user(req: Request) -> Response {
     let db = get_db();
-    let id: u32 = req.param_as("ouob").unwrap_or(0);
+    let id: u32 = req.param_as("id").unwrap_or(0);
     
     match parse_user_request(req).await {
         Ok(user_data) => {
