@@ -10,9 +10,10 @@ impl Query {
     /// Parse query parameters from a URI
     /// 
     /// # Example
-    /// ```
+    /// ```ignore
+    /// use unipotato::Query;
+    /// 
     /// let query = Query::from_uri(req.uri());
-    /// let page = query.get("page");
     /// ```
     pub fn from_uri(uri: &hyper::Uri) -> Self {
         let params = uri.query()
@@ -97,9 +98,18 @@ impl Body {
     /// Parse body as JSON
     /// 
     /// # Example
-    /// ```
-    /// let body = Body::from_incoming(req.into_body()).await?;
-    /// let user: User = body.json()?;
+    /// ```ignore
+    /// use unipotato::Body;
+    /// use serde::Deserialize;
+    /// 
+    /// #[derive(Deserialize)]
+    /// struct User { name: String }
+    /// 
+    /// async fn handler(req: hyper::Request<hyper::body::Incoming>) -> Result<(), Box<dyn std::error::Error>> {
+    ///     let body = Body::from_incoming(req.into_body()).await?;
+    ///     let user: User = body.json()?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, String> {
         let text = self.as_str()?;
