@@ -145,7 +145,13 @@ impl Router {
         
         for route in routes {
             if route.method == method && Self::path_matches(&route.path, &path) {
-                return (route.handler)(req).await;
+                // Extract params and store in extensions
+                let params = Self::extract_params(&route.path, &path);
+                let (mut parts, body) = req.into_parts();
+                parts.extensions.insert(params);
+                let req_with_params = Request::from_parts(parts, body);
+                
+                return (route.handler)(req_with_params).await;
             }
         }
         
