@@ -1,3 +1,4 @@
+//Deprecated: Use examples/simple_server/main.rs instead
 use unipotato::{Request, Response, handler::{html, json}, Unipotato, get, post, put, delete, routes, Query, Body};
 use serde::{Serialize, Deserialize};
 use std::sync::{Arc, Mutex, OnceLock};
