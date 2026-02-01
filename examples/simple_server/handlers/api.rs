@@ -1,6 +1,6 @@
 use unipotato::{Request, Response, handler::json, get, post, put, delete, log_info};
 use crate::models::{User, ApiResponse};
-use crate::handlers::utils::{extract_id, parse_user_request};
+use crate::handlers::utils::{parse_user_request};
 use crate::get_db;
 
 #[get("/users")]
@@ -46,10 +46,10 @@ pub async fn create_user(req: Request) -> Response {
     }
 }
 
-#[put("/users/<id>")]
+#[put("/users/<ouob>")]
 pub async fn update_user(req: Request) -> Response {
     let db = get_db();
-    let id = extract_id(&req);
+    let id: u32 = req.param_as("ouob").unwrap_or(0);
     
     match parse_user_request(req).await {
         Ok(user_data) => {
@@ -70,7 +70,7 @@ pub async fn update_user(req: Request) -> Response {
 #[delete("/users/<id>")]
 pub async fn delete_user(req: Request) -> Response {
     let db = get_db();
-    let id = extract_id(&req);
+    let id: u32 = req.param_as("id").unwrap_or(0);
     let mut data = db.lock().unwrap();
     
     if let Some(pos) = data.users.iter().position(|u| u.id == id) {
