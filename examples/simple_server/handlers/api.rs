@@ -87,3 +87,13 @@ pub async fn health_check(_req: Request) -> Response {
         message: "Server is running".to_string(),
     })
 }
+
+/// Slow endpoint to test async behavior - sleeps for 3 seconds
+#[get("/slow")]
+pub async fn slow_endpoint(_req: Request) -> Response {
+    log_info!("Starting slow request (3 second delay)...");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    log_info!("Slow request completed!");
+    json(ApiResponse::success("Slow response after 3 seconds".to_string()))
+}
+

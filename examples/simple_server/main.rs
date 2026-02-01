@@ -39,6 +39,7 @@ fn main() {
             api::update_user,
             api::delete_user,
             api::health_check,
+            api::slow_endpoint,
         ])
         .start();
 }
