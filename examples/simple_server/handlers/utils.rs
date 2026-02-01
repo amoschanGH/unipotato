@@ -3,10 +3,14 @@ use std::collections::HashMap;
 use crate::models::CreateUserRequest;
 
 pub fn extract_id(req: &Request) -> u32 {
-    req.extensions()
-        .get::<HashMap<String, String>>()
-        .and_then(|params| params.get("id"))
-        .and_then(|val| val.parse().ok())
+    // Get the path from the request URI
+    let path = req.uri().path();
+    
+    // Split by '/' and get the last segment that looks like an ID
+    path.split('/')
+        .filter(|s| !s.is_empty())
+        .last()
+        .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(0)
 }
 

@@ -4,7 +4,7 @@ use tokio::net::TcpListener;
 use std::convert::Infallible;
 use crate::{
     handler::not_found, 
-    route::collect_routes,
+    route::{collect_routes, find_handler},
     log_debug, log_error, log_info, log_request, log_response, log_success,
 };
 
@@ -114,13 +114,9 @@ async fn router(req: Request<Incoming>) -> Result<Response<String>, Infallible> 
 
 /// Find a route handler that matches the request
 fn find_matching_route(req: &Request<Incoming>) -> Option<crate::route::Handler> {
-    let routes = collect_routes();
+    let method = req.method();
+    let path = req.uri().path();
     
-    for route in routes {
-        if req.method() == &route.method && req.uri().path() == route.path.as_str() {
-            return Some(route.handler);
-        }
-    }
-    
-    None
+    // Use regex-based pattern matching from route module
+    find_handler(method, path)
 }
