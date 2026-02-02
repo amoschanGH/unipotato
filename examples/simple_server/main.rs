@@ -15,7 +15,7 @@ pub fn get_db() -> Arc<Mutex<Database>> {
 
 fn main() {
     println!("🥔 Starting Unipotato CRUD Server...");
-    println!("📍 Server running at: http://localhost:8000");
+    println!("📍 Server running at: http://localhost:8080");
     println!("💾 Data will be stored in: database.json");
     println!("\n");
 
@@ -23,6 +23,6 @@ fn main() {
     let db = Arc::new(Mutex::new(Database::load()));
     DB.set(db).expect("Failed to initialize database");
 
-    let app = Unipotato::launch(8000);
+    let app = Unipotato::launch(8080);
     routes::setup_routes(app).start();
 }
