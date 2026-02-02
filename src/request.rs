@@ -3,6 +3,91 @@ use http_body_util::BodyExt;
 use std::collections::HashMap;
 use serde::de::DeserializeOwned;
 
+/// Custom Request wrapper that includes path parameters
+pub struct Request {
+    inner: hyper::Request<Incoming>,
+    params: HashMap<String, String>,
+}
+
+impl Request {
+    /// Create a new Request from a hyper Request
+    pub fn new(inner: hyper::Request<Incoming>) -> Self {
+        Self {
+            inner,
+            params: HashMap::new(),
+        }
+    }
+
+    /// Create a new Request with path parameters
+    pub fn with_params(inner: hyper::Request<Incoming>, params: HashMap<String, String>) -> Self {
+        Self { inner, params }
+    }
+
+    /// Get a path parameter by name
+    /// 
+    /// # Example
+    /// ```ignore
+    /// // For route "/users/<id>"
+    /// let id = req.param("id"); // Returns Some("123") for "/users/123"
+    /// ```
+    pub fn param(&self, name: &str) -> Option<&str> {
+        self.params.get(name).map(|s| s.as_str())
+    }
+
+    /// Get a path parameter as a specific type
+    /// 
+    /// # Example
+    /// ```ignore
+    /// let id: Option<u64> = req.param_as("id");
+    /// ```
+    pub fn param_as<T: std::str::FromStr>(&self, name: &str) -> Option<T> {
+        self.params.get(name).and_then(|s| s.parse().ok())
+    }
+
+    /// Get all path parameters
+    pub fn params(&self) -> &HashMap<String, String> {
+        &self.params
+    }
+
+    /// Get the request method
+    pub fn method(&self) -> &hyper::Method {
+        self.inner.method()
+    }
+
+    /// Get the request URI
+    pub fn uri(&self) -> &hyper::Uri {
+        self.inner.uri()
+    }
+
+    /// Get the request headers
+    pub fn headers(&self) -> &hyper::HeaderMap {
+        self.inner.headers()
+    }
+
+    /// Get a specific header value
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.inner.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+    }
+
+    /// Consume the request and return the inner hyper Request
+    pub fn into_inner(self) -> hyper::Request<Incoming> {
+        self.inner
+    }
+
+    /// Get query parameters
+    pub fn query(&self) -> Query {
+        Query::from_uri(self.inner.uri())
+    }
+
+    /// Consume and read the body
+    pub async fn into_body(self) -> Result<Body, String> {
+        let (_, incoming) = self.inner.into_parts();
+        Body::from_incoming(incoming).await
+    }
+}
+
 /// Query parameter parser for URL queries
 pub struct Query(HashMap<String, String>);
 
@@ -10,9 +95,10 @@ impl Query {
     /// Parse query parameters from a URI
     /// 
     /// # Example
-    /// ```
+    /// ```ignore
+    /// use unipotato::Query;
+    /// 
     /// let query = Query::from_uri(req.uri());
-    /// let page = query.get("page");
     /// ```
     pub fn from_uri(uri: &hyper::Uri) -> Self {
         let params = uri.query()
@@ -97,9 +183,18 @@ impl Body {
     /// Parse body as JSON
     /// 
     /// # Example
-    /// ```
-    /// let body = Body::from_incoming(req.into_body()).await?;
-    /// let user: User = body.json()?;
+    /// ```ignore
+    /// use unipotato::Body;
+    /// use serde::Deserialize;
+    /// 
+    /// #[derive(Deserialize)]
+    /// struct User { name: String }
+    /// 
+    /// async fn handler(req: hyper::Request<hyper::body::Incoming>) -> Result<(), Box<dyn std::error::Error>> {
+    ///     let body = Body::from_incoming(req.into_body()).await?;
+    ///     let user: User = body.json()?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn json<T: DeserializeOwned>(&self) -> Result<T, String> {
         let text = self.as_str()?;

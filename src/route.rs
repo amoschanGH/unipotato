@@ -1,52 +1,146 @@
-use hyper::{Request, Response, Method, body::Incoming};
-use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
+use hyper::{Response, Method, body::Incoming, StatusCode};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::collections::HashMap;
+use regex::Regex;
 
-/// Type alias for async request handlers
+/// Type alias for async request handlers - now uses crate::request::Request
 pub type Handler = Arc<
-    dyn Fn(Request<Incoming>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response<String>> + Send>> 
+    dyn Fn(crate::request::Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Response> + Send>> 
     + Send 
     + Sync
 >;
 
-/// Represents a single route with method, path, and handler
+// Alias for macro compatibility
+pub type RouteHandler = Handler;
+
+/// Public route information for external use
 pub struct Route {
     pub method: Method,
     pub path: String,
     pub handler: Handler,
 }
 
-impl Clone for Route {
-    fn clone(&self) -> Self {
-        Self {
-            method: self.method.clone(),
-            path: self.path.clone(),
-            handler: Arc::clone(&self.handler),
-        }
-    }
+struct RouteInfo {
+    method: Method,
+    original_path: String,
+    pattern: Regex,
+    param_names: Vec<String>,  // Store parameter names like ["id", "post_id"]
+    handler: Handler,
 }
 
 /// Global storage for registered routes
-static ROUTES: Lazy<Mutex<Vec<Route>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static ROUTES: OnceLock<Mutex<HashMap<Method, Vec<RouteInfo>>>> = OnceLock::new();
+
+fn get_routes() -> &'static Mutex<HashMap<Method, Vec<RouteInfo>>> {
+    ROUTES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 thread_local! {
     /// Thread-local storage for mount base path
     static MOUNT_BASE: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
 }
 
-impl Route {
-    /// Create and register a new route
-    pub fn new(method: Method, path: impl Into<String>, handler: Handler) {
-        let route = Self { 
-            method, 
-            path: path.into(), 
-            handler 
-        };
-        
-        if let Ok(mut routes) = ROUTES.lock() {
-            routes.push(route);
+/// Extract parameter names from a path pattern like "/users/<id>/posts/<post_id>"
+fn extract_param_names(path: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut chars = path.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            let mut name = String::new();
+            while let Some(inner) = chars.next() {
+                if inner == '>' {
+                    break;
+                }
+                name.push(inner);
+            }
+            if !name.is_empty() {
+                names.push(name);
+            }
         }
     }
+    names
+}
+
+/// Register a new route with pattern matching support
+pub fn register_route(method: Method, original_path: String, pattern: String, handler: Handler) {
+    let base = get_mount_base();
+    let full_path = build_full_path(&base, &original_path);
+    let full_pattern = if base.is_empty() {
+        pattern
+    } else {
+        format!("^{}{}$", regex::escape(&base), pattern.trim_start_matches('^').trim_end_matches('$'))
+    };
+    
+    // Extract parameter names from the original path
+    let param_names = extract_param_names(&full_path);
+    
+    let mut routes = get_routes().lock().unwrap();
+    let route_info = RouteInfo {
+        method: method.clone(),
+        original_path: full_path,
+        pattern: Regex::new(&full_pattern).expect("Invalid route pattern"),
+        param_names,
+        handler,
+    };
+    routes.entry(method).or_insert_with(Vec::new).push(route_info);
+}
+
+/// Result of finding a handler - includes the handler and extracted parameters
+pub struct HandlerMatch {
+    pub handler: Handler,
+    pub params: HashMap<String, String>,
+}
+
+/// Find a handler for the given method and path, extracting parameters
+pub fn find_handler_with_params(method: &Method, path: &str) -> Option<HandlerMatch> {
+    let routes = get_routes().lock().unwrap();
+    if let Some(method_routes) = routes.get(method) {
+        for route_info in method_routes {
+            if let Some(_captures) = route_info.pattern.captures(path) {
+                // Extract parameter values
+                let mut params = HashMap::new();
+                
+                // The captures include the full match at index 0, then each group
+                // But our pattern uses [^/]+ which doesn't create capture groups
+                // We need to use a different approach - match segments
+                let param_values = extract_param_values(&route_info.original_path, path);
+                
+                for (i, name) in route_info.param_names.iter().enumerate() {
+                    if let Some(value) = param_values.get(i) {
+                        params.insert(name.clone(), value.clone());
+                    }
+                }
+                
+                return Some(HandlerMatch {
+                    handler: route_info.handler.clone(),
+                    params,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Extract parameter values by comparing the route pattern with the actual path
+fn extract_param_values(route_path: &str, actual_path: &str) -> Vec<String> {
+    let route_segments: Vec<&str> = route_path.split('/').collect();
+    let actual_segments: Vec<&str> = actual_path.split('/').collect();
+    
+    let mut values = Vec::new();
+    
+    for (route_seg, actual_seg) in route_segments.iter().zip(actual_segments.iter()) {
+        if route_seg.starts_with('<') && route_seg.ends_with('>') {
+            values.push(actual_seg.to_string());
+        }
+    }
+    
+    values
+}
+
+/// Find a handler for the given method and path (legacy, without params)
+pub fn find_handler(method: &Method, path: &str) -> Option<Handler> {
+    find_handler_with_params(method, path).map(|m| m.handler)
 }
 
 /// Mount routes under a base path
@@ -56,43 +150,32 @@ impl Route {
 /// * `routes_fn` - Closure that registers routes
 pub fn mount(base: &str, routes_fn: impl FnOnce()) {
     let base = base.trim_end_matches('/');
-    let routes_before = count_routes();
-    
     set_mount_base(base);
     routes_fn();
     clear_mount_base();
+}
+
+/// Collect all registered routes for inspection
+pub fn collect_routes() -> Vec<Route> {
+    let routes = get_routes().lock().unwrap();
+    let mut result = Vec::new();
     
-    apply_base_to_new_routes(base, routes_before);
+    for (_method, route_infos) in routes.iter() {
+        for route_info in route_infos {
+            result.push(Route {
+                method: route_info.method.clone(),
+                path: route_info.original_path.clone(),
+                handler: route_info.handler.clone(),
+            });
+        }
+    }
+    
+    result
 }
 
 /// Get the current mount base path
 pub fn get_mount_base() -> String {
     MOUNT_BASE.with(|mb| mb.borrow().clone())
-}
-
-/// Register a new route with the current mount base
-pub fn register_route(method: Method, path: String, handler: Handler) {
-    let base = get_mount_base();
-    let full_path = build_full_path(&base, &path);
-    
-    ROUTES.lock().unwrap().push(Route {
-        method,
-        path: full_path,
-        handler,
-    });
-}
-
-/// Collect all registered routes
-pub fn collect_routes() -> Vec<Route> {
-    ROUTES.lock()
-        .unwrap_or_else(|_| panic!("Failed to lock ROUTES mutex"))
-        .clone()
-}
-
-// === Private Helper Functions ===
-
-fn count_routes() -> usize {
-    ROUTES.lock().unwrap().len()
 }
 
 fn set_mount_base(base: &str) {
@@ -115,15 +198,58 @@ fn build_full_path(base: &str, path: &str) -> String {
     }
 }
 
-fn apply_base_to_new_routes(base: &str, routes_before: usize) {
-    if base.is_empty() {
-        return;
+/// Router that dispatches requests to registered handlers
+pub struct Router;
+
+impl Router {
+    /// Create a new router instance
+    pub fn new() -> Self {
+        Self
     }
     
-    let mut routes = ROUTES.lock().unwrap();
-    for i in routes_before..routes.len() {
-        if !routes[i].path.starts_with(base) {
-            routes[i].path = format!("{}{}", base, routes[i].path);
+    /// Route an incoming request to the appropriate handler
+    pub async fn route(&self, req: hyper::Request<Incoming>) -> Response<String> {
+        let method = req.method().clone();
+        let path = req.uri().path().to_string();
+        
+        // Find matching route using regex patterns with param extraction
+        if let Some(HandlerMatch { handler, params }) = find_handler_with_params(&method, &path) {
+            // Create our custom Request with extracted path parameters
+            let custom_req = crate::request::Request::with_params(req, params);
+            return handler(custom_req).await;
         }
+        
+        // No route found - return 404
+        Self::not_found()
+    }
+    
+    /// Return a 404 Not Found response
+    pub fn not_found() -> Response<String> {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body("404 Not Found".to_string())
+            .unwrap()
+    }
+    
+    /// Return a 500 Internal Server Error response
+    pub fn internal_error(msg: &str) -> Response<String> {
+        Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(format!("500 Internal Server Error: {}", msg))
+            .unwrap()
+    }
+    
+    /// Return a 405 Method Not Allowed response
+    pub fn method_not_allowed() -> Response<String> {
+        Response::builder()
+            .status(StatusCode::METHOD_NOT_ALLOWED)
+            .body("405 Method Not Allowed".to_string())
+            .unwrap()
+    }
+}
+
+impl Default for Router {
+    fn default() -> Self {
+        Self::new()
     }
 }

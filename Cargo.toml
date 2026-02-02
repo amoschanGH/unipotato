@@ -16,7 +16,6 @@ quote = "1.0"
 proc-macro2 = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-lazy_static = "1.4"
 futures-util = "0.3"
 http-body-util = "0.1"
 unipotato_macros = { path = "../unipotato_macros" }
@@ -25,3 +24,9 @@ once_cell = "1.19"
 chrono = "0.4"
 paste = "1.0"
 urlencoding = "2.1"
+regex = "1"
+
+[[example]]
+name = "simple_server"
+path = "examples/simple_server/main.rs"
+
