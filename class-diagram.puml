@@ -1,0 +1,201 @@
+@startuml Unipotato Class Diagram
+!theme plain
+
+title Unipotato: Core Type System
+
+package "Server" {
+  class Unipotato {
+    - port: u16
+    + launch(port: u16) : Unipotato
+    + mount(base: &str, routes_fn: F) : Self
+    + start(self)
+    - launch_internal() : Result<()>
+    - accept_connections(listener) : Result<()>
+    - serve_connection(io) : Result<()>
+  }
+}
+
+package "Route Management" {
+  class RouteInfo {
+    + method: Method
+    + original_path: String
+    + pattern: Regex
+    + param_names: Vec<String>
+    + handler: Handler
+  }
+  
+  class HandlerMatch {
+    + handler: Handler
+    + params: HashMap<String, String>
+  }
+  
+class RouteRegistry <<(S,#FF7700) Singleton>> {
+    {static} ROUTES: OnceLock<Mutex<HashMap>>
+    + register_route(method, path, pattern, handler)
+    + find_handler_with_params(method, path) : Option<HandlerMatch>
+    + collect_routes() : Vec<Route>
+    - extract_param_names(path) : Vec<String>
+    - extract_param_values(route, actual) : Vec<String>
+  }
+  
+  class MountManager {
+    {static} MOUNT_BASE: ThreadLocal<RefCell<String>>
+    + set_mount_base(base: &str)
+    + get_mount_base() : String
+    + clear_mount_base()
+    + mount(base: &str, routes_fn: F)
+  }
+}
+
+package "Request/Response" {
+  class Request {
+    - inner: hyper::Request<Incoming>
+    - params: HashMap<String, String>
+    + new(inner: hyper::Request) : Request
+    + with_params(inner, params) : Request
+    + param(name: &str) : Option<&str>
+    + param_as<T: FromStr>(name: &str) : Option<T>
+    + params() : &HashMap<String, String>
+    + method() : &Method
+    + uri() : &Uri
+    + headers() : &HeaderMap
+    + header(name: &str) : Option<&str>
+    + query() : Query
+    + into_body() : Result<Body>
+  }
+  
+  class Query {
+    - 0: HashMap<String, String>
+    + from_uri(uri: &Uri) : Query
+    + get(key: &str) : Option<&String>
+    + get_or(key: &str, default: &str) : String
+    + has(key: &str) : bool
+    + keys() : Vec<&String>
+    + values() : Vec<&String>
+    - parse_query_string(query: &str) : HashMap
+    - parse_key_value_pair(pair: &str) : Option<(String, String)>
+    - decode_param(s: &str) : String
+  }
+  
+  class Body {
+    - 0: hyper::body::Incoming
+    + json<T: DeserializeOwned>() : Result<T>
+    + text() : Result<String>
+    + bytes() : Result<Bytes>
+  }
+  
+  class ResponseHelpers <<(F,#ADD1B2) Functions>> {
+    + json<T: Serialize>(data: T) : Response
+    + html(body: impl Into<String>) : Response
+    + text(body: impl Into<String>) : Response
+    + not_found() : Response
+    + internal_error(msg: &str) : Response
+  }
+}
+
+package "Type Aliases" {
+  class "Type Aliases" as Types <<(T,lightblue)>> {
+    type Response = hyper::Response<String>
+    type Handler = Arc<dyn Fn(Request) → BoxFuture>
+    type BoxFuture = Pin<Box<dyn Future<Output=Response> + Send>>
+  }
+}
+
+package "Macros" {
+  class "#[get(path)]" as GetMacro <<(M,yellow)>> {
+    Generates:
+    - Original async fn
+    - __ROUTE_INFO_XXX struct
+    - register() method
+  }
+  
+  class "#[post(path)]" as PostMacro <<(M,yellow)>> {
+    Generates route registration
+  }
+  
+  class "#[put(path)]" as PutMacro <<(M,yellow)>> {
+    Generates route registration
+  }
+  
+  class "#[delete(path)]" as DeleteMacro <<(M,yellow)>> {
+    Generates route registration
+  }
+  
+  class "#[patch(path)]" as PatchMacro <<(M,yellow)>> {
+    Generates route registration
+  }
+  
+  class "routes![...]" as RoutesMacro <<(M,yellow)>> {
+    Expands to multiple
+    __ROUTE_INFO::register() calls
+  }
+  
+  class "Macro Implementation" as MacroImpl <<(M,yellow)>> {
+    + http_method_impl(method, args, input) : TokenStream
+    + convert_path_to_pattern(path: &str) : String
+  }
+}
+
+package "Logger" {
+  class Logger <<(F,#ADD1B2) Macros>> {
+    log_info!(...)
+    log_success!(...)
+    log_warning!(...)
+    log_error!(...)
+    log_request!(method, path)
+    log_response!(status, path)
+  }
+}
+
+' Relationships
+Unipotato --> RouteRegistry : registers routes
+Unipotato --> MountManager : uses for mounting
+Unipotato --> Logger : logs startup
+
+RouteRegistry --> RouteInfo : stores
+RouteRegistry --> HandlerMatch : returns
+RouteRegistry --> MountManager : queries base path
+
+Request --> Query : creates
+Request --> Body : converts to
+
+GetMacro --> MacroImpl : implemented by
+PostMacro --> MacroImpl
+PutMacro --> MacroImpl
+DeleteMacro --> MacroImpl
+PatchMacro --> MacroImpl
+
+MacroImpl --> RouteRegistry : generates code calling
+
+RoutesMacro --> RouteRegistry : calls register methods
+
+ResponseHelpers ..> Types : uses Response type
+
+' Notes
+note right of RouteInfo
+  Compiled route pattern
+  with parameter metadata
+end note
+
+note right of Request
+  Wraps hyper::Request
+  with extracted path params
+end note
+
+note right of Query
+  Parses URL query string
+  with URL decoding
+end note
+
+note bottom of MacroImpl
+  Procedural macro implementation
+  Path pattern: "/users/<id>"
+  → Regex: "^/users/[^/]+$"
+end note
+
+note right of RouteRegistry
+  Thread-safe singleton
+  Mutex-protected storage
+end note
+
+@enduml

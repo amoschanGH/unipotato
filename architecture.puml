@@ -1,0 +1,162 @@
+@startuml Unipotato Architecture
+!theme plain
+skinparam componentStyle rectangle
+
+title Unipotato: Web Framework Architecture
+
+package "User Application" {
+  [Handler Functions] as Handlers
+  [Route Configuration] as RouteConfig
+}
+
+package "Unipotato Macros" {
+  [get Decorator] as GetMacro
+  [post Decorator] as PostMacro
+  [put Decorator] as PutMacro
+  [delete Decorator] as DeleteMacro
+  [patch Decorator] as PatchMacro
+  
+  package "Macro Implementation" {
+    [http_method_impl] as MacroImpl
+    [convert_path_to_pattern] as PathConverter
+    note right of PathConverter
+      "/users/~<id~>" → "^/users/[^/]+$"
+    end note
+  }
+}
+
+package "Unipotato Runtime" {
+  package "Server Layer" {
+    [Unipotato Server] as Server
+    [Connection Handler] as ConnHandler
+    [Router] as Router
+    note right of Server
+      • launch(port) → Unipotato
+      • mount(base, routes) → Self
+      • start() → !
+    end note
+  }
+  
+  package "Route Management" {
+    [Route Registry] as Registry
+    [RouteInfo Storage] as RouteInfo
+    [Handler Matcher] as Matcher
+    note right of Registry
+      OnceLock<Mutex<HashMap<Method, Vec<RouteInfo>>>>
+    end note
+  }
+  
+  package "Request Processing" {
+    [Request Wrapper] as Request
+    [Query Parser] as Query
+    [Body Parser] as Body
+    [Parameter Extractor] as ParamExtractor
+    note right of Request
+      • param(name) → Option<&str>
+      • param_as<T>(name) → Option<T>
+      • query() → Query
+      • header(name) → Option<&str>
+    end note
+  }
+  
+  package "Response Helpers" {
+    [JSON Response] as JsonResp
+    [HTML Response] as HtmlResp
+    [Error Response] as ErrorResp
+  }
+  
+  package "Logger" {
+    [Colored Logging] as LoggerComp
+    note right of LoggerComp
+      - log_info
+      - log_success
+      - log_warning
+      - log_error
+    end note
+  }
+}
+
+package "Async Runtime" {
+  [Tokio Runtime] as Tokio
+  [Task Scheduler] as Scheduler
+  [TCP Listener] as TcpListener
+}
+
+package "HTTP Layer" {
+  [Hyper Server] as Hyper
+  [HTTP/1.1 Protocol] as HTTP
+  [Service Function] as Service
+}
+
+package "Network" {
+  [TCP/IP] as NetworkTCP
+  [Client Connections] as Clients
+}
+
+' Macro processing flow
+Handlers --> GetMacro : decorated with
+Handlers --> PostMacro
+Handlers --> PutMacro
+Handlers --> DeleteMacro
+Handlers --> PatchMacro
+
+GetMacro --> MacroImpl : expands via
+PostMacro --> MacroImpl
+PutMacro --> MacroImpl
+DeleteMacro --> MacroImpl
+PatchMacro --> MacroImpl
+
+MacroImpl --> PathConverter : uses
+MacroImpl --> Registry : generates registration code
+
+' Server initialization
+RouteConfig --> Server : configures
+Server --> Registry : registers routes
+Server --> Tokio : runs on
+Server --> Router : uses
+
+' Request handling flow
+NetworkTCP --> Clients
+Clients --> TcpListener : connects to
+TcpListener --> Tokio : managed by
+Tokio --> Scheduler : schedules tasks
+
+Scheduler --> ConnHandler : spawns task
+ConnHandler --> Hyper : serves via
+Hyper --> HTTP : implements
+Hyper --> Service : calls
+Service --> Router : routes request
+
+Router --> Matcher : finds handler
+Matcher --> Registry : queries
+Registry --> RouteInfo : returns
+
+Router --> Request : wraps hyper::Request
+Request --> Query : parses query string
+Request --> Body : reads body
+Request --> ParamExtractor : extracts params
+
+Router --> Handlers : invokes matched handler
+Handlers --> JsonResp : returns
+Handlers --> HtmlResp
+Handlers --> ErrorResp
+
+Router --> LoggerComp : logs request/response
+
+' Component notes
+note bottom of MacroImpl
+  Compile-time code generation
+  Zero runtime overhead
+end note
+
+note bottom of Registry
+  Thread-safe global storage
+  Mutex-protected HashMap
+end note
+
+note bottom of Tokio
+  Multi-threaded work-stealing
+  scheduler for async tasks
+end note
+
+@enduml

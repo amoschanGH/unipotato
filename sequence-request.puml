@@ -1,0 +1,158 @@
+@startuml Unipotato Request Handling Sequence
+!theme plain
+
+title Unipotato: HTTP Request Processing Flow
+
+actor Client
+participant "TCP Listener" as TCP
+participant "Tokio Runtime" as Tokio
+participant "Hyper Server" as Hyper
+participant "Router" as Router
+participant "Route Registry" as Registry
+participant "Request Wrapper" as Request
+participant "Handler Function" as Handler
+participant "Response Helper" as Response
+
+== Server Startup ==
+activate Tokio
+note right: Server initialized\nRoutes registered
+
+== Incoming Request ==
+Client -> TCP: HTTP GET /api/users/123
+activate TCP
+
+TCP -> Tokio: accept connection
+activate Tokio
+
+Tokio -> Tokio: spawn connection task
+Tokio -> Hyper: serve_connection(stream, service_fn)
+activate Hyper
+
+== Request Routing ==
+Hyper -> Router: router(hyper::Request)
+activate Router
+
+Router -> Router: extract method & path
+note right
+  method = GET
+  path = "/api/users/123"
+end note
+
+Router -> Registry: find_handler_with_params(GET, "/api/users/123")
+activate Registry
+
+Registry -> Registry: lookup routes for GET
+Registry -> Registry: iterate through route patterns
+
+loop for each route
+  Registry -> Registry: regex.captures(path)
+  note right
+    Pattern: "^/api/users/[^/]+$"
+    Match: "/api/users/123" ✓
+  end note
+end
+
+Registry -> Registry: extract_param_values("/api/users/~<id~>", "/api/users/123")
+Registry -> Registry: build params HashMap
+note right
+  params = {
+    "id": "123"
+  }
+end note
+
+Registry --> Router: Some(HandlerMatch { handler, params })
+deactivate Registry
+
+== Request Processing ==
+Router -> Request: Request::with_params(hyper_req, params)
+activate Request
+
+Request -> Request: parse query string
+Request -> Request: store parameters
+Request --> Router: custom_request
+deactivate Request
+
+Router -> Handler: handler(custom_request).await
+activate Handler
+
+Handler -> Request: req.param_as<u64>("id")
+activate Request
+Request --> Handler: Some(123)
+deactivate Request
+
+Handler -> Handler: fetch user from database
+note right: Business logic executed
+
+Handler -> Response: json(user_data)
+activate Response
+
+Response -> Response: serde_json::to_string(data)
+Response -> Response: set Content-Type: application/json
+Response -> Response: set status 200 OK
+
+Response --> Handler: hyper::Response
+deactivate Response
+
+Handler --> Router: Response
+deactivate Handler
+
+== Response Delivery ==
+Router -> Router: log_response(status, path)
+note right: [INFO] [14:23:45] GET /api/users/123 → 200
+
+Router --> Hyper: Ok(Response)
+deactivate Router
+
+Hyper --> Client: HTTP/1.1 200 OK\nContent-Type: application/json\n\n{"id":123,"name":"Alice"}
+deactivate Hyper
+
+deactivate Tokio
+deactivate TCP
+
+== 404 Not Found Scenario ==
+Client -> TCP: HTTP GET /api/unknown
+activate TCP
+
+TCP -> Tokio: accept connection
+activate Tokio
+
+Tokio -> Hyper: serve_connection
+activate Hyper
+
+Hyper -> Router: router(request)
+activate Router
+
+Router -> Registry: find_handler_with_params(GET, "/api/unknown")
+activate Registry
+
+Registry -> Registry: iterate through patterns
+note right: No pattern matches
+
+Registry --> Router: None
+deactivate Registry
+
+Router -> Response: not_found()
+activate Response
+
+Response -> Response: set status 404
+Response -> Response: set body "Not Found"
+
+Response --> Router: 404 Response
+deactivate Response
+
+Router --> Hyper: Ok(404 Response)
+deactivate Router
+
+Hyper --> Client: HTTP/1.1 404 Not Found
+deactivate Hyper
+
+deactivate Tokio
+deactivate TCP
+
+note over Registry
+  Global route storage
+  using OnceLock, Mutex, HashMap
+  with thread-safe locking
+end note
+
+@enduml
