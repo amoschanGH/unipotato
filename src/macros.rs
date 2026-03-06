@@ -33,9 +33,9 @@ macro_rules! __register_route {
 #[macro_export]
 macro_rules! launch {
     ($port:expr) => {
-        $crate::Server::new($port)
+        $crate::Unipotato::launch($port)
     };
     () => {
-        $crate::Server::new(8000)
+        $crate::Unipotato::launch(8000)
     };
 }

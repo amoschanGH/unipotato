@@ -20,6 +20,11 @@ impl Unipotato {
         Self { port }
     }
 
+    /// Get the port number the server is configured to run on
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     pub fn mount<F>(self, base: &str, routes_fn: F) -> Self 
     where 
         F: FnOnce()

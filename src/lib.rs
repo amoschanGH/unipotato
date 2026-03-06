@@ -10,6 +10,9 @@ pub use route::{Route, mount, register_route, Router, Handler, collect_routes, f
 pub use server::Unipotato;
 pub use request::{Query, Body, Request};
 
+// Type alias for backward compatibility with macro tests
+pub type Server = Unipotato;
+
 // Re-export Response type
 pub type Response = hyper::Response<String>;
 
