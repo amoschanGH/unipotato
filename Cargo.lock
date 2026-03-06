@@ -695,13 +695,15 @@ dependencies = [
  "serde_json",
  "syn",
  "tokio",
- "unipotato_macros",
+ "unipotato-macros",
  "urlencoding",
 ]
 
 [[package]]
-name = "unipotato_macros"
+name = "unipotato-macros"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ebf7755a78061111c8ca81530447808cdafdc1fc1c9728fb1139c5211e062f6"
 dependencies = [
  "proc-macro2",
  "quote",
