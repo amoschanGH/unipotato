@@ -24,7 +24,7 @@ macro_rules! routes {
 #[macro_export]
 macro_rules! __register_route {
     ($module:ident, $handler:ident) => {
-        paste::paste! {
+        $crate::paste::paste! {
             $module::[<__ROUTE_INFO_ $handler:upper>]::register();
         }
     };

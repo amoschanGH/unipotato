@@ -1,5 +1,12 @@
 use hyper::StatusCode;
 
+pub fn text(body: impl Into<String>) -> hyper::Response<String> {
+    hyper::Response::builder()
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .body(body.into())
+        .unwrap()
+}
+
 pub fn html(body: impl Into<String>) -> hyper::Response<String> {
     hyper::Response::builder()
         .header("Content-Type", "text/html")

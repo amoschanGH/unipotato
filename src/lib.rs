@@ -19,6 +19,11 @@ pub type Response = hyper::Response<String>;
 // Re-export the proc-macro attributes
 pub use unipotato_macros::{get, post, put, delete, patch};
 
+// Re-export internal crates so macros and user code can reach them without
+// declaring these as direct dependencies.
+pub use hyper;
+pub use paste;
+
 // Re-export for proc-macros
 pub mod export {
     pub use ctor;
