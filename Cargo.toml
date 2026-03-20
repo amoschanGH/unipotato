@@ -1,6 +1,6 @@
 [package]
 name = "unipotato"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A macro-based Rust backend framework for AI integration"
 authors = ["CHAN, Hin Chung <chanhinchung334@gmail.com>"]
