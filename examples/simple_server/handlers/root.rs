@@ -9,7 +9,7 @@ pub async fn index(_req: Request) -> Response {
             <title>Unipotato CRUD App</title>
             <style>
                 body { font-family: Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; }
-                h1 { color: #ff6b35; }
+                h1 { color: #ec9191; }
                 h2 { color: #333; border-bottom: 2px solid #ff6b35; padding-bottom: 5px; }
                 h3 { color: #666; margin-top: 20px; }
                 .user-item { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
