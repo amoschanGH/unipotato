@@ -1,19 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use unipotato::{Request, Response, launch, routes, __register_route, handler};
+    use unipotato::{launch, routes, __register_route};
     
     // ============ Test Helpers ============
-    
-    // Mock handler functions for testing
-    #[allow(dead_code)]
-    async fn mock_handler(_req: Request) -> Response {
-        handler::html("OK")
-    }
-    
-    #[allow(dead_code)]
-    async fn mock_handler_2(_req: Request) -> Response {
-        handler::html("OK")
-    }
     
     // Mock module structure for testing module::handler syntax
     mod test_handlers {
