@@ -1,6 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use once_cell::sync::Lazy;
+
+// Global shutdown flag for graceful server shutdown
+pub static SHUTDOWN_FLAG: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+
+pub fn set_shutdown() {
+    SHUTDOWN_FLAG.store(true, Ordering::Release);
+}
+
+pub fn should_shutdown() -> bool {
+    SHUTDOWN_FLAG.load(Ordering::Acquire)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

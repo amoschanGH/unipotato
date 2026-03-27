@@ -852,7 +852,8 @@ async fn run_training_task(
     }
 
     for epoch in 0..config.epochs {
-        if flags.should_stop() {
+        // Check for graceful shutdown
+        if flags.should_stop() || crate::training_state::should_shutdown() {
             let mut st = lock_state(&state);
             st.status = TrainingStatus::Stopped;
             st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
@@ -875,7 +876,7 @@ async fn run_training_task(
         }
 
         loop {
-            if flags.should_stop() {
+            if flags.should_stop() || crate::training_state::should_shutdown() {
                 let mut st = lock_state(&state);
                 st.status = TrainingStatus::Stopped;
                 st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
@@ -888,11 +889,11 @@ async fn run_training_task(
             }
 
             // Check pause flag and wait if paused (non-blocking)
-            while flags.is_paused() && !flags.should_stop() {
+            while flags.is_paused() && !flags.should_stop() && !crate::training_state::should_shutdown() {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
 
-            if flags.should_stop() {
+            if flags.should_stop() || crate::training_state::should_shutdown() {
                 let mut st = lock_state(&state);
                 st.status = TrainingStatus::Stopped;
                 st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
