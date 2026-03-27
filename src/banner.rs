@@ -75,6 +75,6 @@ pub fn print_minimal_banner() {
     println!("  \\___/|_| |_|_| .__/ \\___/ \\__\\__,_|\\__\\___/ ");
     println!("               |_|                            ");
     println!("{}{}", RESET, GRAY);
-    println!("  🥔 v0.1.0 - A Rust Web Framework");
+    println!("  🥔 v0.1.3 - A Rust Web Framework");
     println!("{}\n", RESET);
 }

@@ -183,25 +183,16 @@ class MnistCnnTrainer:
         trainer.best_model_b64 = model_b64
         return trainer
 
-    def train_epoch(self):
+    def start_epoch(self):
+        self.model.train()
+        self._epoch_iter = iter(self.train_loader)
+        self._epoch_running_loss = 0.0
+        self._epoch_batches = 0
+
+    def _finalize_epoch(self):
         import torch
 
-        self.model.train()
-
-        running_loss = 0.0
-        batches = 0
-
-        for xb, yb in self.train_loader:
-            self.optimizer.zero_grad()
-            logits = self.model(xb)
-            loss = self.criterion(logits, yb)
-            loss.backward()
-            self.optimizer.step()
-
-            running_loss += float(loss.item())
-            batches += 1
-
-        train_loss = running_loss / max(batches, 1)
+        train_loss = self._epoch_running_loss / max(self._epoch_batches, 1)
         self.train_losses.append(train_loss)
 
         self.model.eval()
@@ -226,6 +217,23 @@ class MnistCnnTrainer:
             self.best_model_b64 = self._encode_checkpoint()
 
         return float(train_loss), float(val_acc)
+
+    def train_next_batch(self):
+        try:
+            xb, yb = next(self._epoch_iter)
+        except StopIteration:
+            train_loss, val_acc = self._finalize_epoch()
+            return True, train_loss, val_acc
+
+        self.optimizer.zero_grad()
+        logits = self.model(xb)
+        loss = self.criterion(logits, yb)
+        loss.backward()
+        self.optimizer.step()
+
+        self._epoch_running_loss += float(loss.item())
+        self._epoch_batches += 1
+        return False, 0.0, 0.0
 
     def infer_from_pixels(self, pixels):
         import numpy as np
@@ -610,36 +618,45 @@ pub async fn load_model(_req: Request) -> Response {
     }
 
     let state = get_state();
-    let mut st = lock_state(&state);
+    
+    let model_data = {
+        let st = lock_state(&state);
 
-    if matches!(st.status, TrainingStatus::Running | TrainingStatus::Paused) {
-        return json(ErrorResponse {
-            error: "Cannot load model while training is active".to_string(),
-        });
-    }
-
-    let Some(model_data) = &st.model_data else {
-        return json(ErrorResponse {
-            error: "No uploaded/trained model available".to_string(),
-        });
-    };
-
-    let model_b64 = base64::engine::general_purpose::STANDARD.encode(model_data);
-    let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
-
-    if let Err(e) = py_exec!(load_cmd.as_str()) {
-        return json(ErrorResponse {
-            error: format!("Failed to load checkpoint: {}", e),
-        });
-    }
-
-    let valid = match python!(-> bool, "trainer is not None") {
-        Ok(ok) => ok,
-        Err(e) => {
+        if matches!(st.status, TrainingStatus::Running | TrainingStatus::Paused) {
             return json(ErrorResponse {
-                error: format!("Failed to load checkpoint: {}", e),
+                error: "Cannot load model while training is active".to_string(),
             });
         }
+
+        if st.model_data.is_none() {
+            return json(ErrorResponse {
+                error: "No uploaded/trained model available".to_string(),
+            });
+        }
+
+        st.model_data.clone().unwrap()
+    };
+
+    let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model_data);
+    let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
+
+    let load_result = tokio::task::spawn_blocking(move || {
+        py_exec!(load_cmd.as_str())
+    }).await;
+
+    if load_result.is_err() || load_result.unwrap().is_err() {
+        return json(ErrorResponse {
+            error: "Failed to load checkpoint".to_string(),
+        });
+    }
+
+    let valid_result = tokio::task::spawn_blocking(|| {
+        python!(-> bool, "trainer is not None")
+    }).await;
+
+    let valid = match valid_result {
+        Ok(Ok(ok)) => ok,
+        _ => false,
     };
 
     if !valid {
@@ -648,6 +665,7 @@ pub async fn load_model(_req: Request) -> Response {
         });
     }
 
+    let mut st = lock_state(&state);
     st.model_loaded = true;
     if st.model_source.is_none() {
         st.model_source = Some("uploaded".to_string());
@@ -695,19 +713,24 @@ pub async fn infer_drawing(req: Request) -> Response {
     }
 
     let state = get_state();
-    let mut st = lock_state(&state);
+    
+    let (model_source, model_data) = {
+        let st = lock_state(&state);
 
-    if !st.model_loaded {
-        return json(ErrorResponse {
-            error: "No active model loaded. Train or load a model first.".to_string(),
-        });
-    }
+        if !st.model_loaded {
+            return json(ErrorResponse {
+                error: "No active model loaded. Train or load a model first.".to_string(),
+            });
+        }
 
-    if st.model_data.is_none() {
-        return json(ErrorResponse {
-            error: "No model bytes available".to_string(),
-        });
-    }
+        if st.model_data.is_none() {
+            return json(ErrorResponse {
+                error: "No model bytes available".to_string(),
+            });
+        }
+
+        (st.model_source.clone(), st.model_data.clone().unwrap())
+    };
 
     let pixels_json = match serde_json::to_string(&payload.pixels) {
         Ok(v) => v,
@@ -718,35 +741,51 @@ pub async fn infer_drawing(req: Request) -> Response {
         }
     };
 
-    if st.model_source.as_deref() == Some("trained") {
-        let has_trainer = python!(-> bool, "'trainer' in globals() and trainer is not None").unwrap_or(false);
+    if model_source.as_deref() == Some("trained") {
+        let has_trainer_result = tokio::task::spawn_blocking(|| {
+            python!(-> bool, "'trainer' in globals() and trainer is not None")
+        }).await;
+
+        let has_trainer = match has_trainer_result {
+            Ok(Ok(ok)) => ok,
+            _ => false,
+        };
+
         if !has_trainer {
-            if let Some(bytes) = &st.model_data {
-                let model_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-                let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
-                if let Err(e) = py_exec!(load_cmd.as_str()) {
-                    return json(ErrorResponse {
-                        error: format!("Failed to restore trainer: {}", e),
-                    });
-                }
+            let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model_data);
+            let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
+
+            let load_result = tokio::task::spawn_blocking(move || {
+                py_exec!(load_cmd.as_str())
+            }).await;
+
+            if load_result.is_err() || load_result.unwrap().is_err() {
+                return json(ErrorResponse {
+                    error: "Failed to restore trainer".to_string(),
+                });
             }
         }
     }
 
     let infer_cmd = format!("trainer.infer_from_pixels({})", pixels_json);
-    let prediction = match python!(-> (i64, f64, Vec<f64>), infer_cmd.as_str()) {
-        Ok((pred, conf, probs)) => InferenceResult {
+    let infer_result = tokio::task::spawn_blocking(move || {
+        python!(-> (i64, f64, Vec<f64>), infer_cmd.as_str())
+    }).await;
+
+    let prediction = match infer_result {
+        Ok(Ok((pred, conf, probs))) => InferenceResult {
             predicted_digit: pred.max(0) as usize,
             confidence: conf,
             probabilities: probs,
         },
-        Err(e) => {
+        _ => {
             return json(ErrorResponse {
-                error: format!("Inference failed: {}", e),
+                error: "Inference failed".to_string(),
             });
         }
     };
 
+    let mut st = lock_state(&state);
     st.last_inference = Some(prediction.clone());
     json(prediction)
 }
@@ -762,19 +801,29 @@ async fn run_training_task(
 ) {
     let start_time = Instant::now();
 
-    if let Err(e) = init_python_ml() {
-        update_state_error(
-            &state,
-            format!(
+    // Run blockingPython initialization in blocking thread pool
+    let init_result = tokio::task::spawn_blocking(|| {
+        if let Err(e) = init_python_ml() {
+            return Err(format!(
                 "Failed to init Python. Ensure numpy/torch/torchvision are installed: {}",
                 e
-            ),
-        );
+            ));
+        }
+
+        if let Err(e) = setup_trainer_class() {
+            return Err(format!("Failed to setup trainer class: {}", e));
+        }
+
+        Ok(())
+    }).await;
+
+    if let Err(e) = init_result {
+        update_state_error(&state, format!("Task spawn failed: {}", e));
         return;
     }
 
-    if let Err(e) = setup_trainer_class() {
-        update_state_error(&state, format!("Failed to setup trainer class: {}", e));
+    if let Err(e) = init_result.unwrap() {
+        update_state_error(&state, e);
         return;
     }
 
@@ -788,7 +837,16 @@ async fn run_training_task(
         config.batch_size
     );
 
-    if let Err(e) = py_exec!(init_trainer.as_str()) {
+    let init_trainer_result = tokio::task::spawn_blocking(move || {
+        py_exec!(init_trainer.as_str())
+    }).await;
+
+    if let Err(e) = init_trainer_result {
+        update_state_error(&state, format!("Task spawn failed: {}", e));
+        return;
+    }
+
+    if let Err(e) = init_trainer_result.unwrap() {
         update_state_error(&state, format!("Trainer init failed: {}", e));
         return;
     }
@@ -801,33 +859,98 @@ async fn run_training_task(
             return;
         }
 
-        while flags.is_paused() && !flags.should_stop() {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Start epoch in blocking thread pool
+        let start_epoch_result = tokio::task::spawn_blocking(|| {
+            py_exec!("trainer.start_epoch()")
+        }).await;
+
+        if let Err(e) = start_epoch_result {
+            update_state_error(&state, format!("Task spawn failed: {}", e));
+            return;
         }
 
-        match python!(-> (f64, f64), "trainer.train_epoch()") {
-            Ok((train_loss, val_acc)) => {
+        if let Err(e) = start_epoch_result.unwrap() {
+            update_state_error(&state, format!("Failed to start epoch {}: {}", epoch + 1, e));
+            return;
+        }
+
+        loop {
+            if flags.should_stop() {
                 let mut st = lock_state(&state);
-                st.metrics.current_epoch = epoch + 1;
-                st.metrics.train_loss_history.push(train_loss);
-                st.metrics.val_accuracy_history.push(val_acc);
+                st.status = TrainingStatus::Stopped;
                 st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
                 st.metrics.training_logs.push(format!(
-                    "[Epoch {}/{}] Loss: {:.4} | Val Acc: {:.2}%",
+                    "Training stopped at epoch {}/{}",
                     epoch + 1,
-                    config.epochs,
-                    train_loss,
-                    val_acc * 100.0
+                    config.epochs
                 ));
-            }
-            Err(e) => {
-                update_state_error(&state, format!("Epoch {} failed: {}", epoch + 1, e));
                 return;
+            }
+
+            // Check pause flag and wait if paused (non-blocking)
+            while flags.is_paused() && !flags.should_stop() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+
+            if flags.should_stop() {
+                let mut st = lock_state(&state);
+                st.status = TrainingStatus::Stopped;
+                st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
+                st.metrics.training_logs.push(format!(
+                    "Training stopped at epoch {}/{}",
+                    epoch + 1,
+                    config.epochs
+                ));
+                return;
+            }
+
+            // Train one batch in blocking thread pool (allows pause/stop checks between batches)
+            let batch_result = tokio::task::spawn_blocking(|| {
+                python!(-> (bool, f64, f64), "trainer.train_next_batch()")
+            }).await;
+
+            if let Err(e) = batch_result {
+                update_state_error(&state, format!("Task spawn failed: {}", e));
+                return;
+            }
+
+            match batch_result.unwrap() {
+                Ok((done, train_loss, val_acc)) => {
+                    if done {
+                        let mut st = lock_state(&state);
+                        st.metrics.current_epoch = epoch + 1;
+                        st.metrics.train_loss_history.push(train_loss);
+                        st.metrics.val_accuracy_history.push(val_acc);
+                        st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
+                        st.metrics.training_logs.push(format!(
+                            "[Epoch {}/{}] Loss: {:.4} | Val Acc: {:.2}%",
+                            epoch + 1,
+                            config.epochs,
+                            train_loss,
+                            val_acc * 100.0
+                        ));
+                        break;
+                    }
+                }
+                Err(e) => {
+                    update_state_error(&state, format!("Epoch {} failed: {}", epoch + 1, e));
+                    return;
+                }
             }
         }
     }
 
-    match python!(-> (Vec<f64>, Vec<f64>, f64, f64, f64, String), "trainer.finalize()") {
+    // Finalize in blocking thread pool
+    let finalize_result = tokio::task::spawn_blocking(|| {
+        python!(-> (Vec<f64>, Vec<f64>, f64, f64, f64, String), "trainer.finalize()")
+    }).await;
+
+    if let Err(e) = finalize_result {
+        update_state_error(&state, format!("Task spawn failed: {}", e));
+        return;
+    }
+
+    match finalize_result.unwrap() {
         Ok((train_losses, val_accs, best_loss, best_acc, test_acc, model_b64)) => {
             let mut st = lock_state(&state);
             st.status = TrainingStatus::Completed;
