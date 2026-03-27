@@ -1,6 +1,6 @@
 # ml_server
 
-A [Unipotato](https://github.com/amoschanGH/unipotato) web server.
+MNIST CNN training and inference server powered by [Unipotato](https://github.com/amoschanGH/unipotato) and `rustpy-ml`.
 
 ## Running
 
@@ -10,22 +10,34 @@ cargo run
 
 Server starts on <http://localhost:8080>.
 
-## Enabled features
+Dashboard: <http://localhost:8080/training>
 
-- HTML templates via `handlers/template.rs`
-- Python integration via `rustpy` / PyO3 (`handlers/py.rs`)
+## Python requirements
 
-## Project layout
+The training backend uses Python packages through `rustpy-ml`:
 
-```
-src/
-  main.rs          – entry point
-  routes.rs        – mount routes here
-  handlers/
-    mod.rs         – re-exports
-    root.rs        – root / health handlers
-    template.rs    – HTML template handler
-    py.rs          – Python integration handler
-templates/
-  index.html       – example HTML template
-```
+- `numpy`
+- `torch`
+- `torchvision`
+
+MNIST is downloaded automatically on first training run.
+
+## Training API
+
+- `POST /train/start`
+- `POST /train/pause`
+- `POST /train/resume`
+- `POST /train/stop`
+- `GET /train/status`
+- `POST /train/reset`
+- `GET /train/model` (download checkpoint)
+- `POST /train/model/upload` (upload checkpoint bytes)
+- `POST /train/model/load` (activate uploaded checkpoint)
+- `POST /train/infer-drawing` (predict from normalized 28x28 pixels)
+
+## Features
+
+- Background MNIST CNN training with pause/resume/stop.
+- Live metrics with loss/accuracy charts and logs.
+- Draw-to-infer UI with auto-center and normalization.
+- Checkpoint download, upload, and reload.

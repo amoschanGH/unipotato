@@ -1,189 +1,314 @@
-//! Neural network training handler with pause/resume/stop control.
+//! MNIST CNN training handler with pause/resume/stop control.
 //!
-//! Manages training lifecycle through REST endpoints, with async training tasks
-//! that respect pause and stop signals. Uses rustpy-ml for Python ML integration.
+//! Uses rustpy-ml to run PyTorch + torchvision training and supports
+//! drawing inference plus checkpoint upload/reload.
 
 use rustpy_ml::prelude::*;
-use unipotato::{Request, Response, handler::{json, text}, post, get};
+use unipotato::{
+    get, post,
+    handler::{json, text},
+    Request, Response,
+};
+
+use base64::Engine as _;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
-use once_cell::sync::Lazy;
-use base64::Engine as _;
 
-use crate::training_state::{TrainingState, TrainingStatus, TrainingConfig, TrainingMetrics, TrainingControlFlags};
+use crate::training_state::{
+    InferenceResult, TrainingConfig, TrainingControlFlags, TrainingMetrics, TrainingState,
+    TrainingStatus,
+};
 
 // ============================================================================
 // Training Implementation Using rustpy-ml
 // ============================================================================
 
-/// Initialize Python ML environment - runs once
+/// Initialize Python ML environment - runs once.
 fn init_python_ml() -> rustpy_ml::Result<()> {
     static INIT: Lazy<()> = Lazy::new(|| {
-        let _ = rustpy_ml::init_with_ml(&["numpy", "torch", "sklearn"]);
+        let _ = rustpy_ml::init_with_ml(&["numpy", "torch", "torchvision"]);
     });
     Lazy::force(&INIT);
     Ok(())
 }
 
-/// Define the trainer class in Python - this is a one-time setup
+/// Define trainer class and helper functions in Python.
 fn setup_trainer_class() -> rustpy_ml::Result<()> {
-    py_exec!(r#"
-class IrisTrainer:
-    """Neural network trainer for Iris classification using PyTorch."""
-    
-    def __init__(self, hidden_nodes, lr, batch_size, seed=42):
+    py_exec!(
+        r#"
+import base64
+import io
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+from torchvision import datasets, transforms
+
+class MnistCnnTrainer:
+    """CNN trainer for MNIST classification."""
+
+    def __init__(self, conv1, conv2, kernel_size, dense_units, lr, batch_size, seed=42):
         import numpy as np
         import torch
         import torch.nn as nn
         import torch.optim as optim
-        from sklearn.datasets import load_iris
-        from sklearn.model_selection import train_test_split
-        from sklearn.preprocessing import StandardScaler
-        import io
-        
-        # Initialize random seeds
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        
-        # Load and prepare data
-        iris = load_iris()
-        X = iris.data.astype(np.float32)
-        y = iris.target.astype(np.int64)
-        
-        # Split: 60% train, 20% val, 20% test
-        X_train_val, self.X_test, y_train_val, self.y_test = train_test_split(
-            X, y, test_size=0.2, random_state=seed, stratify=y
+        from torch.utils.data import DataLoader, random_split
+        from torchvision import datasets, transforms
+
+        self.conv1 = int(conv1)
+        self.conv2 = int(conv2)
+        self.kernel_size = int(kernel_size)
+        self.dense_units = int(dense_units)
+        self.lr = float(lr)
+        self.batch_size = int(batch_size)
+        self.seed = int(seed)
+
+        torch.manual_seed(self.seed)
+        np.random.seed(self.seed)
+
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+
+        full_train = datasets.MNIST(
+            root="data",
+            train=True,
+            download=True,
+            transform=transform,
         )
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(
-            X_train_val, y_train_val, test_size=0.25, random_state=seed, stratify=y_train_val
+        test_set = datasets.MNIST(
+            root="data",
+            train=False,
+            download=True,
+            transform=transform,
         )
-        
-        # Normalize features
-        scaler = StandardScaler()
-        self.X_train = scaler.fit_transform(self.X_train).astype(np.float32)
-        self.X_val = scaler.transform(self.X_val).astype(np.float32)
-        self.X_test = scaler.transform(self.X_test).astype(np.float32)
-        
-        # Convert to PyTorch tensors
-        self.X_train_t = torch.tensor(self.X_train, dtype=torch.float32)
-        self.y_train_t = torch.tensor(self.y_train, dtype=torch.long)
-        self.X_val_t = torch.tensor(self.X_val, dtype=torch.float32)
-        self.y_val_t = torch.tensor(self.y_val, dtype=torch.long)
-        self.X_test_t = torch.tensor(self.X_test, dtype=torch.float32)
-        self.y_test_t = torch.tensor(self.y_test, dtype=torch.long)
-        
-        # Build network dynamically
-        layers = []
-        prev_size = 4  # Iris has 4 features
-        for hidden_size in hidden_nodes:
-            layers.append(nn.Linear(prev_size, int(hidden_size)))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(0.2))
-            prev_size = int(hidden_size)
-        layers.append(nn.Linear(prev_size, 3))  # 3 classes
-        
-        class DynamicNet(nn.Module):
-            def __init__(self, seq_layers):
-                super().__init__()
-                self.net = nn.Sequential(*seq_layers)
-            def forward(self, x):
-                return self.net(x)
-        
-        self.model = DynamicNet(layers)
+
+        train_size = 55000
+        val_size = len(full_train) - train_size
+        generator = torch.Generator().manual_seed(self.seed)
+        train_set, val_set = random_split(full_train, [train_size, val_size], generator=generator)
+
+        self.train_loader = DataLoader(train_set, batch_size=self.batch_size, shuffle=True)
+        self.val_loader = DataLoader(val_set, batch_size=self.batch_size, shuffle=False)
+        self.test_loader = DataLoader(test_set, batch_size=self.batch_size, shuffle=False)
+
+        self.model = self._build_model()
         self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
-        
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
+
         self.train_losses = []
         self.val_accs = []
         self.best_loss = float("inf")
         self.best_acc = 0.0
-        self.model_state = None
-        self.batch_size = int(batch_size)
-        self.io = io
-    
-    def train_epoch(self):
-        """Train for one epoch and return (loss, accuracy)."""
-        import torch
+        self.best_model_b64 = ""
+
+    def _build_model(self):
+        import torch.nn as nn
+
+        padding = self.kernel_size // 2
+
+        class CnnNet(nn.Module):
+            def __init__(self, conv1, conv2, kernel_size, dense_units, padding):
+                super().__init__()
+                self.features = nn.Sequential(
+                    nn.Conv2d(1, conv1, kernel_size=kernel_size, padding=padding),
+                    nn.ReLU(),
+                    nn.MaxPool2d(2),
+                    nn.Conv2d(conv1, conv2, kernel_size=kernel_size, padding=padding),
+                    nn.ReLU(),
+                    nn.MaxPool2d(2),
+                )
+                self.classifier = nn.Sequential(
+                    nn.Flatten(),
+                    nn.Linear(conv2 * 7 * 7, dense_units),
+                    nn.ReLU(),
+                    nn.Dropout(0.25),
+                    nn.Linear(dense_units, 10),
+                )
+
+            def forward(self, x):
+                x = self.features(x)
+                x = self.classifier(x)
+                return x
+
+        return CnnNet(self.conv1, self.conv2, self.kernel_size, self.dense_units, padding)
+
+    def _checkpoint_dict(self):
+        return {
+            "model_state": self.model.state_dict(),
+            "conv1": self.conv1,
+            "conv2": self.conv2,
+            "kernel_size": self.kernel_size,
+            "dense_units": self.dense_units,
+            "seed": self.seed,
+            "best_loss": self.best_loss,
+            "best_acc": self.best_acc,
+        }
+
+    def _encode_checkpoint(self):
         import base64
-        
+        import io
+        import torch
+
+        buffer = io.BytesIO()
+        torch.save(self._checkpoint_dict(), buffer)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    @classmethod
+    def from_checkpoint_b64(cls, model_b64, lr=0.001, batch_size=64):
+        import base64
+        import io
+        import torch
+
+        raw = base64.b64decode(model_b64)
+        checkpoint = torch.load(io.BytesIO(raw), map_location="cpu", weights_only=False)
+
+        trainer = cls(
+            int(checkpoint["conv1"]),
+            int(checkpoint["conv2"]),
+            int(checkpoint["kernel_size"]),
+            int(checkpoint["dense_units"]),
+            float(lr),
+            int(batch_size),
+            int(checkpoint.get("seed", 42)),
+        )
+
+        trainer.model.load_state_dict(checkpoint["model_state"])
+        trainer.model.eval()
+        trainer.best_loss = float(checkpoint.get("best_loss", trainer.best_loss))
+        trainer.best_acc = float(checkpoint.get("best_acc", trainer.best_acc))
+        trainer.best_model_b64 = model_b64
+        return trainer
+
+    def train_epoch(self):
+        import torch
+
         self.model.train()
-        idx = torch.randperm(self.X_train_t.size(0))
-        x_epoch = self.X_train_t[idx]
-        y_epoch = self.y_train_t[idx]
-        
-        epoch_loss = 0.0
-        steps = 0
-        for i in range(0, x_epoch.size(0), self.batch_size):
-            xb = x_epoch[i:i + self.batch_size]
-            yb = y_epoch[i:i + self.batch_size]
-            
+
+        running_loss = 0.0
+        batches = 0
+
+        for xb, yb in self.train_loader:
             self.optimizer.zero_grad()
             logits = self.model(xb)
             loss = self.criterion(logits, yb)
             loss.backward()
             self.optimizer.step()
-            
-            epoch_loss += float(loss.item())
-            steps += 1
-        
-        train_loss = epoch_loss / max(steps, 1)
-        self.train_losses.append(float(train_loss))
-        
-        # Validate
+
+            running_loss += float(loss.item())
+            batches += 1
+
+        train_loss = running_loss / max(batches, 1)
+        self.train_losses.append(train_loss)
+
+        self.model.eval()
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for xb, yb in self.val_loader:
+                logits = self.model(xb)
+                pred = torch.argmax(logits, dim=1)
+                correct += int((pred == yb).sum().item())
+                total += int(yb.size(0))
+
+        val_acc = float(correct / max(total, 1))
+        self.val_accs.append(val_acc)
+
+        if train_loss < self.best_loss:
+            self.best_loss = train_loss
+
+        if val_acc >= self.best_acc:
+            self.best_acc = val_acc
+            self.best_model_b64 = self._encode_checkpoint()
+
+        return float(train_loss), float(val_acc)
+
+    def infer_from_pixels(self, pixels):
+        import numpy as np
+        import torch
+
+        arr = np.asarray(pixels, dtype=np.float32).reshape(28, 28)
+        arr = np.clip(arr, 0.0, 1.0)
+
+        x = torch.tensor(arr, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
         self.model.eval()
         with torch.no_grad():
-            val_logits = self.model(self.X_val_t)
-            val_pred = torch.argmax(val_logits, dim=1)
-            val_acc = float((val_pred == self.y_val_t).float().mean().item())
-            self.val_accs.append(val_acc)
-        
-        # Save best model
-        if val_acc > self.best_acc:
-            self.best_acc = val_acc
-            buffer = self.io.BytesIO()
-            torch.save(self.model.state_dict(), buffer)
-            self.model_state = base64.b64encode(buffer.getvalue()).decode('utf-8')
-        
-        if train_loss < self.best_loss:
-            self.best_loss = float(train_loss)
-        
-        return (float(train_loss), float(val_acc))
-    
+            logits = self.model(x)
+            probs = torch.softmax(logits, dim=1).squeeze(0)
+
+        pred = int(torch.argmax(probs).item())
+        confidence = float(probs[pred].item())
+        probabilities = [float(v) for v in probs.tolist()]
+
+        return pred, confidence, probabilities
+
     def finalize(self):
-        """Evaluate on test set and return all results as tuple."""
         import torch
-        
+
+        self.model.eval()
+        correct = 0
+        total = 0
+
         with torch.no_grad():
-            test_logits = self.model(self.X_test_t)
-            test_pred = torch.argmax(test_logits, dim=1)
-            test_acc = float((test_pred == self.y_test_t).float().mean().item())
-        
+            for xb, yb in self.test_loader:
+                logits = self.model(xb)
+                pred = torch.argmax(logits, dim=1)
+                correct += int((pred == yb).sum().item())
+                total += int(yb.size(0))
+
+        test_acc = float(correct / max(total, 1))
+
+        if not self.best_model_b64:
+            self.best_model_b64 = self._encode_checkpoint()
+
         return (
             [float(v) for v in self.train_losses],
             [float(v) for v in self.val_accs],
             float(self.best_loss),
             float(self.best_acc),
             float(test_acc),
-            self.model_state or ""
+            self.best_model_b64,
         )
 
-# Trainer class definition flag
-"#)?;
+def infer_from_checkpoint(model_b64, pixels):
+    trainer = MnistCnnTrainer.from_checkpoint_b64(model_b64)
+    return trainer.infer_from_pixels(pixels)
+
+def validate_checkpoint(model_b64):
+    _ = MnistCnnTrainer.from_checkpoint_b64(model_b64)
+    return True
+"#
+    )?;
+
     Ok(())
 }
 
-/// Request body for starting training
 #[derive(Debug, Deserialize)]
 pub struct StartTrainingRequest {
-    pub hidden_layers: usize,
-    pub nodes_per_layer: Vec<usize>,
+    pub conv_channels_1: usize,
+    pub conv_channels_2: usize,
+    pub kernel_size: usize,
+    pub dense_units: usize,
     pub epochs: usize,
     pub learning_rate: f64,
     pub batch_size: usize,
 }
 
-/// Response wrapper
+#[derive(Debug, Deserialize)]
+pub struct InferDrawingRequest {
+    pub pixels: Vec<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadModelRequest {
+    pub data: String,
+}
+
 #[derive(Debug, Serialize)]
 struct MessageResponse {
     message: String,
@@ -194,19 +319,21 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ModelDownload {
+    filename: String,
+    data: String,
+}
+
 // ============================================================================
 // State Management
 // ============================================================================
 
-/// Global training state
-static TRAINING_STATE: Lazy<Arc<Mutex<TrainingState>>> = Lazy::new(|| {
-    Arc::new(Mutex::new(TrainingState::default()))
-});
+static TRAINING_STATE: Lazy<Arc<Mutex<TrainingState>>> =
+    Lazy::new(|| Arc::new(Mutex::new(TrainingState::default())));
 
-/// Global control flags
-static CONTROL_FLAGS: Lazy<Arc<TrainingControlFlags>> = Lazy::new(|| {
-    Arc::new(TrainingControlFlags::default())
-});
+static CONTROL_FLAGS: Lazy<Arc<TrainingControlFlags>> =
+    Lazy::new(|| Arc::new(TrainingControlFlags::default()));
 
 fn get_state() -> Arc<Mutex<TrainingState>> {
     TRAINING_STATE.clone()
@@ -227,8 +354,6 @@ fn lock_state<'a>(state: &'a Arc<Mutex<TrainingState>>) -> MutexGuard<'a, Traini
 // REST Endpoints
 // ============================================================================
 
-/// POST /train/start
-/// Start training with given hyperparameters
 #[post("/start")]
 pub async fn start_training(req: Request) -> Response {
     let body = match req.into_body().await {
@@ -241,27 +366,37 @@ pub async fn start_training(req: Request) -> Response {
 
     let config: StartTrainingRequest = match serde_json::from_str(&body) {
         Ok(c) => c,
-        Err(e) => return json(ErrorResponse { error: format!("Parse error: {}", e) }),
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Parse error: {}", e),
+            });
+        }
     };
 
-    // Validate input
-    if config.hidden_layers == 0 {
-        return json(ErrorResponse { error: "hidden_layers must be >= 1".to_string() });
+    if config.conv_channels_1 == 0 || config.conv_channels_2 == 0 {
+        return json(ErrorResponse {
+            error: "conv channels must be > 0".to_string(),
+        });
     }
-    if config.nodes_per_layer.len() != config.hidden_layers {
-        return json(ErrorResponse { 
-            error: format!(
-                "nodes_per_layer length ({}) must match hidden_layers ({})",
-                config.nodes_per_layer.len(),
-                config.hidden_layers
-            )
+    if config.kernel_size == 0 {
+        return json(ErrorResponse {
+            error: "kernel_size must be > 0".to_string(),
+        });
+    }
+    if config.dense_units == 0 {
+        return json(ErrorResponse {
+            error: "dense_units must be > 0".to_string(),
         });
     }
     if config.epochs == 0 {
-        return json(ErrorResponse { error: "epochs must be > 0".to_string() });
+        return json(ErrorResponse {
+            error: "epochs must be > 0".to_string(),
+        });
     }
     if config.learning_rate <= 0.0 {
-        return json(ErrorResponse { error: "learning_rate must be > 0".to_string() });
+        return json(ErrorResponse {
+            error: "learning_rate must be > 0".to_string(),
+        });
     }
 
     let state = get_state();
@@ -269,16 +404,19 @@ pub async fn start_training(req: Request) -> Response {
 
     match st.status {
         TrainingStatus::Running | TrainingStatus::Paused => {
-            return json(ErrorResponse { error: "Training already in progress".to_string() });
+            return json(ErrorResponse {
+                error: "Training already in progress".to_string(),
+            });
         }
         _ => {}
     }
 
-    // Reset and configure state
     st.status = TrainingStatus::Running;
     st.config = Some(TrainingConfig {
-        hidden_layers: config.hidden_layers,
-        nodes_per_layer: config.nodes_per_layer.clone(),
+        conv_channels_1: config.conv_channels_1,
+        conv_channels_2: config.conv_channels_2,
+        kernel_size: config.kernel_size,
+        dense_units: config.dense_units,
         epochs: config.epochs,
         learning_rate: config.learning_rate,
         batch_size: config.batch_size,
@@ -286,13 +424,18 @@ pub async fn start_training(req: Request) -> Response {
     st.metrics = TrainingMetrics::default();
     st.error_message = None;
     st.model_path = None;
+    st.model_loaded = false;
+    st.model_source = None;
+    st.last_inference = None;
 
     drop(st);
 
-    // Spawn training task
+    let flags = get_flags();
+    flags.reset();
+
     let state_clone = state.clone();
-    let flags_clone = get_flags().clone();
-    
+    let flags_clone = flags.clone();
+
     tokio::spawn(async move {
         run_training_task(state_clone, config, flags_clone).await;
     });
@@ -302,8 +445,6 @@ pub async fn start_training(req: Request) -> Response {
     })
 }
 
-/// POST /train/pause
-/// Pause current training
 #[post("/pause")]
 pub async fn pause_training(_req: Request) -> Response {
     let state = get_state();
@@ -312,22 +453,17 @@ pub async fn pause_training(_req: Request) -> Response {
     match st.status {
         TrainingStatus::Running => {
             st.status = TrainingStatus::Paused;
-            let flags = get_flags();
-            flags.set_pause(true);
+            get_flags().set_pause(true);
             json(MessageResponse {
                 message: "Training paused".to_string(),
             })
         }
-        _ => {
-            json(ErrorResponse {
-                error: "Training not running".to_string(),
-            })
-        }
+        _ => json(ErrorResponse {
+            error: "Training not running".to_string(),
+        }),
     }
 }
 
-/// POST /train/resume
-/// Resume paused training
 #[post("/resume")]
 pub async fn resume_training(_req: Request) -> Response {
     let state = get_state();
@@ -336,22 +472,17 @@ pub async fn resume_training(_req: Request) -> Response {
     match st.status {
         TrainingStatus::Paused => {
             st.status = TrainingStatus::Running;
-            let flags = get_flags();
-            flags.set_pause(false);
+            get_flags().set_pause(false);
             json(MessageResponse {
                 message: "Training resumed".to_string(),
             })
         }
-        _ => {
-            json(ErrorResponse {
-                error: "Training not paused".to_string(),
-            })
-        }
+        _ => json(ErrorResponse {
+            error: "Training not paused".to_string(),
+        }),
     }
 }
 
-/// POST /train/stop
-/// Stop current training
 #[post("/stop")]
 pub async fn stop_training(_req: Request) -> Response {
     let state = get_state();
@@ -360,22 +491,17 @@ pub async fn stop_training(_req: Request) -> Response {
     match st.status {
         TrainingStatus::Running | TrainingStatus::Paused => {
             st.status = TrainingStatus::Stopped;
-            let flags = get_flags();
-            flags.set_stop(true);
+            get_flags().set_stop(true);
             json(MessageResponse {
                 message: "Training stopped".to_string(),
             })
         }
-        _ => {
-            json(ErrorResponse {
-                error: "Training not active".to_string(),
-            })
-        }
+        _ => json(ErrorResponse {
+            error: "Training not active".to_string(),
+        }),
     }
 }
 
-/// GET /train/status
-/// Get current training status and metrics
 #[get("/status")]
 pub async fn get_status(_req: Request) -> Response {
     let state = get_state();
@@ -383,8 +509,6 @@ pub async fn get_status(_req: Request) -> Response {
     json(st.clone())
 }
 
-/// POST /train/reset
-/// Reset training state
 #[post("/reset")]
 pub async fn reset_training(_req: Request) -> Response {
     let state = get_state();
@@ -400,16 +524,13 @@ pub async fn reset_training(_req: Request) -> Response {
     }
 
     *st = TrainingState::default();
-    let flags = get_flags();
-    flags.reset();
+    get_flags().reset();
 
     json(MessageResponse {
         message: "Training state reset".to_string(),
     })
 }
 
-/// GET /train/model
-/// Download trained model file (returns base64 encoded)
 #[get("/model")]
 pub async fn download_model(_req: Request) -> Response {
     let state = get_state();
@@ -417,13 +538,8 @@ pub async fn download_model(_req: Request) -> Response {
 
     if let Some(model_data) = &st.model_data {
         let encoded = base64::engine::general_purpose::STANDARD.encode(model_data);
-        #[derive(Serialize)]
-        struct ModelDownload {
-            filename: String,
-            data: String,
-        }
         json(ModelDownload {
-            filename: "iris_model.pt".to_string(),
+            filename: "mnist_cnn_model.pt".to_string(),
             data: encoded,
         })
     } else {
@@ -433,11 +549,212 @@ pub async fn download_model(_req: Request) -> Response {
     }
 }
 
+#[post("/model/upload")]
+pub async fn upload_model(req: Request) -> Response {
+    let body = match req.into_body().await {
+        Ok(b) => match b.as_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return text("Invalid UTF-8 in request body".to_string()),
+        },
+        Err(e) => return text(format!("Failed to read body: {}", e)),
+    };
+
+    let payload: UploadModelRequest = match serde_json::from_str(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Parse error: {}", e),
+            });
+        }
+    };
+
+    let model_bytes = match base64::engine::general_purpose::STANDARD.decode(payload.data) {
+        Ok(b) => b,
+        Err(_) => {
+            return json(ErrorResponse {
+                error: "Model data is not valid base64".to_string(),
+            });
+        }
+    };
+
+    let state = get_state();
+    let mut st = lock_state(&state);
+
+    if matches!(st.status, TrainingStatus::Running | TrainingStatus::Paused) {
+        return json(ErrorResponse {
+            error: "Cannot upload while training is active".to_string(),
+        });
+    }
+
+    st.model_data = Some(model_bytes);
+    st.model_path = Some("mnist_cnn_model.pt".to_string());
+    st.model_loaded = false;
+    st.model_source = Some("uploaded".to_string());
+
+    json(MessageResponse {
+        message: "Model uploaded. Call /train/model/load to validate and activate it.".to_string(),
+    })
+}
+
+#[post("/model/load")]
+pub async fn load_model(_req: Request) -> Response {
+    if let Err(e) = init_python_ml() {
+        return json(ErrorResponse {
+            error: format!("Failed to init Python: {}", e),
+        });
+    }
+    if let Err(e) = setup_trainer_class() {
+        return json(ErrorResponse {
+            error: format!("Failed to setup trainer class: {}", e),
+        });
+    }
+
+    let state = get_state();
+    let mut st = lock_state(&state);
+
+    if matches!(st.status, TrainingStatus::Running | TrainingStatus::Paused) {
+        return json(ErrorResponse {
+            error: "Cannot load model while training is active".to_string(),
+        });
+    }
+
+    let Some(model_data) = &st.model_data else {
+        return json(ErrorResponse {
+            error: "No uploaded/trained model available".to_string(),
+        });
+    };
+
+    let model_b64 = base64::engine::general_purpose::STANDARD.encode(model_data);
+    let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
+
+    if let Err(e) = py_exec!(load_cmd.as_str()) {
+        return json(ErrorResponse {
+            error: format!("Failed to load checkpoint: {}", e),
+        });
+    }
+
+    let valid = match python!(-> bool, "trainer is not None") {
+        Ok(ok) => ok,
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Failed to load checkpoint: {}", e),
+            });
+        }
+    };
+
+    if !valid {
+        return json(ErrorResponse {
+            error: "Checkpoint validation failed".to_string(),
+        });
+    }
+
+    st.model_loaded = true;
+    if st.model_source.is_none() {
+        st.model_source = Some("uploaded".to_string());
+    }
+
+    json(MessageResponse {
+        message: "Model loaded for inference".to_string(),
+    })
+}
+
+#[post("/infer-drawing")]
+pub async fn infer_drawing(req: Request) -> Response {
+    let body = match req.into_body().await {
+        Ok(b) => match b.as_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return text("Invalid UTF-8 in request body".to_string()),
+        },
+        Err(e) => return text(format!("Failed to read body: {}", e)),
+    };
+
+    let payload: InferDrawingRequest = match serde_json::from_str(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Parse error: {}", e),
+            });
+        }
+    };
+
+    if payload.pixels.len() != 28 * 28 {
+        return json(ErrorResponse {
+            error: "pixels must contain exactly 784 normalized values".to_string(),
+        });
+    }
+
+    if let Err(e) = init_python_ml() {
+        return json(ErrorResponse {
+            error: format!("Failed to init Python: {}", e),
+        });
+    }
+    if let Err(e) = setup_trainer_class() {
+        return json(ErrorResponse {
+            error: format!("Failed to setup trainer class: {}", e),
+        });
+    }
+
+    let state = get_state();
+    let mut st = lock_state(&state);
+
+    if !st.model_loaded {
+        return json(ErrorResponse {
+            error: "No active model loaded. Train or load a model first.".to_string(),
+        });
+    }
+
+    if st.model_data.is_none() {
+        return json(ErrorResponse {
+            error: "No model bytes available".to_string(),
+        });
+    }
+
+    let pixels_json = match serde_json::to_string(&payload.pixels) {
+        Ok(v) => v,
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Failed to serialize drawing pixels: {}", e),
+            });
+        }
+    };
+
+    if st.model_source.as_deref() == Some("trained") {
+        let has_trainer = python!(-> bool, "'trainer' in globals() and trainer is not None").unwrap_or(false);
+        if !has_trainer {
+            if let Some(bytes) = &st.model_data {
+                let model_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+                let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
+                if let Err(e) = py_exec!(load_cmd.as_str()) {
+                    return json(ErrorResponse {
+                        error: format!("Failed to restore trainer: {}", e),
+                    });
+                }
+            }
+        }
+    }
+
+    let infer_cmd = format!("trainer.infer_from_pixels({})", pixels_json);
+    let prediction = match python!(-> (i64, f64, Vec<f64>), infer_cmd.as_str()) {
+        Ok((pred, conf, probs)) => InferenceResult {
+            predicted_digit: pred.max(0) as usize,
+            confidence: conf,
+            probabilities: probs,
+        },
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Inference failed: {}", e),
+            });
+        }
+    };
+
+    st.last_inference = Some(prediction.clone());
+    json(prediction)
+}
+
 // ============================================================================
-// Core Training Logic - Simplified using rustpy-ml
+// Core Training Logic
 // ============================================================================
 
-/// Run training task in background with control signal support
 async fn run_training_task(
     state: Arc<Mutex<TrainingState>>,
     config: StartTrainingRequest,
@@ -445,9 +762,14 @@ async fn run_training_task(
 ) {
     let start_time = Instant::now();
 
-    // Initialize Python and setup trainer once
     if let Err(e) = init_python_ml() {
-        update_state_error(&state, format!("Failed to init Python: {}", e));
+        update_state_error(
+            &state,
+            format!(
+                "Failed to init Python. Ensure numpy/torch/torchvision are installed: {}",
+                e
+            ),
+        );
         return;
     }
 
@@ -456,21 +778,14 @@ async fn run_training_task(
         return;
     }
 
-    // Build nodes list for Python
-    let nodes_list = format!(
-        "[{}]",
-        config
-            .nodes_per_layer
-            .iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    // Create trainer instance
     let init_trainer = format!(
-        "trainer = IrisTrainer({}, {}, {})",
-        nodes_list, config.learning_rate, config.batch_size
+        "trainer = MnistCnnTrainer({}, {}, {}, {}, {}, {})",
+        config.conv_channels_1,
+        config.conv_channels_2,
+        config.kernel_size,
+        config.dense_units,
+        config.learning_rate,
+        config.batch_size
     );
 
     if let Err(e) = py_exec!(init_trainer.as_str()) {
@@ -478,9 +793,7 @@ async fn run_training_task(
         return;
     }
 
-    // Training epoch loop
     for epoch in 0..config.epochs {
-        // Check stop signal
         if flags.should_stop() {
             let mut st = lock_state(&state);
             st.status = TrainingStatus::Stopped;
@@ -488,12 +801,10 @@ async fn run_training_task(
             return;
         }
 
-        // Handle pause signal
         while flags.is_paused() && !flags.should_stop() {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
 
-        // Run one epoch of training
         match python!(-> (f64, f64), "trainer.train_epoch()") {
             Ok((train_loss, val_acc)) => {
                 let mut st = lock_state(&state);
@@ -516,9 +827,8 @@ async fn run_training_task(
         }
     }
 
-    // Finalize training and get results
     match python!(-> (Vec<f64>, Vec<f64>, f64, f64, f64, String), "trainer.finalize()") {
-        Ok((train_losses, val_accs, best_loss, best_acc, _test_acc, model_b64)) => {
+        Ok((train_losses, val_accs, best_loss, best_acc, test_acc, model_b64)) => {
             let mut st = lock_state(&state);
             st.status = TrainingStatus::Completed;
             st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
@@ -527,20 +837,20 @@ async fn run_training_task(
             st.metrics.best_loss = best_loss;
             st.metrics.best_accuracy = best_acc;
 
-            // Decode and store model
             if !model_b64.is_empty() {
-                if let Ok(model_bytes) =
-                    base64::engine::general_purpose::STANDARD.decode(&model_b64)
-                {
+                if let Ok(model_bytes) = base64::engine::general_purpose::STANDARD.decode(&model_b64) {
                     st.model_data = Some(model_bytes);
-                    st.model_path = Some("iris_model.pt".to_string());
+                    st.model_path = Some("mnist_cnn_model.pt".to_string());
+                    st.model_loaded = true;
+                    st.model_source = Some("trained".to_string());
                 }
             }
 
             st.metrics.training_logs.push(format!(
-                "✓ Training complete! Loss: {:.4}, Val Acc: {:.2}%",
+                "✓ Training complete! Best Loss: {:.4}, Best Val Acc: {:.2}%, Test Acc: {:.2}%",
                 best_loss,
-                best_acc * 100.0
+                best_acc * 100.0,
+                test_acc * 100.0
             ));
         }
         Err(e) => {
@@ -549,9 +859,9 @@ async fn run_training_task(
     }
 }
 
-/// Helper to update state with error status
 fn update_state_error(state: &Arc<Mutex<TrainingState>>, error: String) {
     let mut st = lock_state(state);
     st.status = TrainingStatus::Completed;
     st.error_message = Some(error);
+    st.model_loaded = false;
 }

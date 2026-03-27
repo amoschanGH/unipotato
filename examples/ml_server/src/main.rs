@@ -7,7 +7,7 @@ use unipotato::Unipotato;
 fn main() {
     println!("🥔 Starting ml_server…");
     println!("📍 Server: http://localhost:8080");
-    println!("🎯 Training Dashboard: http://localhost:8080/training");
+    println!("🧠 MNIST Dashboard: http://localhost:8080/training");
 
 
     let app = Unipotato::launch(8080);

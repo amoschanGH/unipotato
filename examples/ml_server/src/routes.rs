@@ -25,5 +25,8 @@ pub fn setup_routes(app: Unipotato) -> Unipotato {
         train::get_status,
         train::reset_training,
         train::download_model,
+        train::upload_model,
+        train::load_model,
+        train::infer_drawing,
     ])
 }

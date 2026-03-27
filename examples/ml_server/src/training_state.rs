@@ -14,11 +14,20 @@ pub enum TrainingStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrainingConfig {
-    pub hidden_layers: usize,
-    pub nodes_per_layer: Vec<usize>,
+    pub conv_channels_1: usize,
+    pub conv_channels_2: usize,
+    pub kernel_size: usize,
+    pub dense_units: usize,
     pub epochs: usize,
     pub learning_rate: f64,
     pub batch_size: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InferenceResult {
+    pub predicted_digit: usize,
+    pub confidence: f64,
+    pub probabilities: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +63,9 @@ pub struct TrainingState {
     pub error_message: Option<String>,
     pub model_path: Option<String>,
     pub model_data: Option<Vec<u8>>,
+    pub model_loaded: bool,
+    pub model_source: Option<String>,
+    pub last_inference: Option<InferenceResult>,
 }
 
 impl Default for TrainingState {
@@ -65,6 +77,9 @@ impl Default for TrainingState {
             error_message: None,
             model_path: None,
             model_data: None,
+            model_loaded: false,
+            model_source: None,
+            last_inference: None,
         }
     }
 }

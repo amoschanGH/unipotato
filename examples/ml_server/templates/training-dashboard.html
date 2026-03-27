@@ -3,827 +3,794 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Training Dashboard</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <title>MNIST CNN Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
+      :root {
+        --bg-a: #f3eee5;
+        --bg-b: #d7e0ee;
+        --card: #fffdf8;
+        --ink: #16202a;
+        --muted: #576474;
+        --accent: #ee6c4d;
+        --accent-2: #335c67;
+        --ok: #2a9d8f;
+        --warn: #c77d1f;
+        --bad: #bc4749;
+        --line: #d8d2c8;
+      }
+
       * {
         box-sizing: border-box;
-        margin: 0;
-        padding: 0;
       }
 
       body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #fdf6ec;
-        padding: 2rem;
-        min-height: 100vh;
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 12% 15%, #ffe7d3 0%, transparent 36%), radial-gradient(circle at 85% 84%, #d2e9ff 0%, transparent 36%),
+          linear-gradient(135deg, var(--bg-a), var(--bg-b));
+        font-family: 'Avenir Next', 'Segoe UI', sans-serif;
       }
 
-      .container {
-        max-width: 1400px;
+      .wrap {
+        max-width: 1240px;
         margin: 0 auto;
-      }
-
-      h1 {
-        color: #ff6b35;
-        margin-bottom: 2rem;
-        text-align: center;
-      }
-
-      .main-grid {
+        padding: 24px 16px 48px;
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 2rem;
-        margin-bottom: 2rem;
+        gap: 14px;
+      }
+
+      .hero {
+        padding: 20px 22px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: linear-gradient(90deg, rgba(255, 255, 255, 0.86), rgba(255, 250, 243, 0.95));
+        box-shadow: 0 10px 30px rgba(9, 20, 32, 0.08);
+      }
+
+      .hero h1 {
+        margin: 0;
+        font-size: 1.7rem;
+        letter-spacing: 0.02em;
+      }
+
+      .hero p {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: 14px;
       }
 
       .card {
-        background: white;
-        border-radius: 12px;
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-        padding: 2rem;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: 0 8px 26px rgba(9, 20, 32, 0.06);
+        padding: 14px;
       }
 
       .card h2 {
-        font-size: 1.3rem;
-        color: #333;
-        margin-bottom: 1.5rem;
-        border-bottom: 2px solid #ff6b35;
-        padding-bottom: 0.5rem;
+        margin: 0 0 12px;
+        font-size: 1.1rem;
+        color: var(--accent-2);
+        letter-spacing: 0.01em;
       }
 
-      /* Configuration Panel */
-      .form-group {
-        margin-bottom: 1.5rem;
+      .controls {
+        display: grid;
+        gap: 10px;
       }
 
       label {
-        display: block;
-        margin-bottom: 0.5rem;
-        color: #555;
-        font-weight: 500;
-        font-size: 0.95rem;
+        display: grid;
+        gap: 4px;
+        font-size: 0.88rem;
+        color: var(--muted);
       }
 
       input[type='number'],
-      input[type='text'],
-      input[type='range'] {
+      input[type='file'] {
         width: 100%;
-        padding: 0.75rem;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 0.95rem;
-        font-family: inherit;
+        border: 1px solid #c9cfd8;
+        background: #ffffff;
+        color: var(--ink);
+        border-radius: 9px;
+        padding: 8px 10px;
+        font-size: 0.92rem;
       }
 
-      input[type='number']:focus,
-      input[type='text']:focus {
-        outline: none;
-        border-color: #ff6b35;
-        box-shadow: 0 0 4px rgba(255, 107, 53, 0.2);
-      }
-
-      input[type='range'] {
-        padding: 0.5rem;
-        cursor: pointer;
-      }
-
-      .slider-value {
-        display: inline-block;
-        background: #ff6b35;
-        color: white;
-        padding: 0.2rem 0.6rem;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        margin-left: 0.5rem;
-        font-weight: 600;
-      }
-
-      /* Status Display */
-      .status-display {
-        background: #f5f5f5;
-        padding: 1rem;
-        border-radius: 8px;
-        margin-bottom: 1.5rem;
-        border-left: 4px solid #ff6b35;
-      }
-
-      .status-label {
-        color: #666;
-        font-size: 0.9rem;
-        margin-bottom: 0.5rem;
-      }
-
-      .status-value {
-        font-size: 1.3rem;
-        font-weight: 600;
-        color: #ff6b35;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-      }
-
-      .status-value.idle {
-        color: #999;
-      }
-      .status-value.running {
-        color: #4caf50;
-      }
-      .status-value.paused {
-        color: #ff9800;
-      }
-      .status-value.completed {
-        color: #2196f3;
-      }
-      .status-value.stopped {
-        color: #f44336;
-      }
-
-      .error-message {
-        background: #ffebee;
-        color: #c62828;
-        padding: 0.75rem;
-        border-radius: 6px;
-        margin-top: 0.5rem;
-        display: none;
-        font-size: 0.9rem;
-      }
-
-      .error-message.show {
-        display: block;
-      }
-
-      /* Buttons */
-      .button-group {
+      .btn-row {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.75rem;
-        margin-top: 1.5rem;
-      }
-
-      .button-group.all-buttons {
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
       }
 
       button {
-        padding: 0.75rem 1.5rem;
-        border: none;
-        border-radius: 6px;
-        font-size: 0.95rem;
+        border: 1px solid transparent;
+        border-radius: 9px;
         font-weight: 600;
+        font-size: 0.86rem;
+        padding: 9px 10px;
         cursor: pointer;
-        transition: all 0.3s ease;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+        transition:
+          transform 0.16s ease,
+          opacity 0.16s ease;
       }
 
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+      }
       button:disabled {
-        opacity: 0.5;
+        opacity: 0.55;
         cursor: not-allowed;
       }
 
-      .btn-primary {
-        background: #ff6b35;
-        color: white;
+      .primary {
+        background: var(--accent);
+        color: #fff;
+      }
+      .secondary {
+        background: #f4f5f7;
+        color: var(--ink);
+        border-color: #d4d9e0;
+      }
+      .success {
+        background: var(--ok);
+        color: #fff;
+      }
+      .danger {
+        background: var(--bad);
+        color: #fff;
       }
 
-      .btn-primary:hover:not(:disabled) {
-        background: #e55a24;
-        box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
-        transform: translateY(-2px);
+      .status-pill {
+        display: inline-block;
+        margin-top: 2px;
+        padding: 6px 10px;
+        border-radius: 20px;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #fff;
+        background: var(--muted);
       }
 
-      .btn-secondary {
-        background: #ffd89b;
-        color: #333;
-      }
-
-      .btn-secondary:hover:not(:disabled) {
-        background: #ffcf7f;
-        box-shadow: 0 4px 12px rgba(255, 179, 100, 0.3);
-        transform: translateY(-2px);
-      }
-
-      .btn-danger {
-        background: #f44336;
-        color: white;
-      }
-
-      .btn-danger:hover:not(:disabled) {
-        background: #da190b;
-        box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
-        transform: translateY(-2px);
-      }
-
-      .btn-reset {
-        background: #9e9e9e;
-        color: white;
-      }
-
-      .btn-reset:hover:not(:disabled) {
-        background: #757575;
-        box-shadow: 0 4px 12px rgba(158, 158, 158, 0.3);
-        transform: translateY(-2px);
-      }
-
-      /* Metrics Display */
-      .metrics-grid {
+      .metrics {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 12px;
       }
 
-      .metric-box {
-        background: linear-gradient(135deg, #ff6b35 0%, #ff8555 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        text-align: center;
+      .metric {
+        background: #fff;
+        border: 1px solid #dce3ea;
+        border-radius: 11px;
+        padding: 10px;
+        min-height: 72px;
       }
 
-      .metric-box.secondary {
-        background: linear-gradient(135deg, #4caf50 0%, #66bb6a 100%);
+      .metric .label {
+        color: var(--muted);
+        font-size: 0.78rem;
+        letter-spacing: 0.02em;
       }
 
-      .metric-label {
-        font-size: 0.85rem;
-        opacity: 0.9;
-        margin-bottom: 0.25rem;
-      }
-
-      .metric-value {
-        font-size: 1.8rem;
+      .metric .value {
+        margin-top: 6px;
+        font-size: 1.2rem;
         font-weight: 700;
       }
 
-      /* Charts */
-      .charts-grid {
+      .charts {
         display: grid;
         grid-template-columns: 1fr 1fr;
-        gap: 1.5rem;
-        margin-top: 1.5rem;
+        gap: 10px;
+        margin-bottom: 12px;
       }
 
-      .chart-container {
-        position: relative;
-        height: 300px;
-        margin-top: 1rem;
+      .canvas-box {
+        border: 1px dashed #bec8d4;
+        border-radius: 10px;
+        background: #f8fafc;
+        padding: 8px;
+        display: grid;
+        gap: 8px;
+        justify-items: center;
       }
 
-      canvas {
-        max-height: 300px;
+      #drawCanvas {
+        background: #000;
+        border-radius: 8px;
+        touch-action: none;
+        cursor: crosshair;
       }
 
-      /* Responsive */
-      @media (max-width: 1024px) {
-        .main-grid {
+      .infer-grid {
+        display: grid;
+        grid-template-columns: 310px 1fr;
+        gap: 10px;
+      }
+
+      .preview-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: 0.83rem;
+      }
+
+      #previewCanvas {
+        border: 1px solid #d2d9e2;
+        image-rendering: pixelated;
+        width: 112px;
+        height: 112px;
+        background: #000;
+      }
+
+      .logs {
+        border: 1px solid #d2d9e2;
+        border-radius: 10px;
+        background: #10181f;
+        color: #d2dde9;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.78rem;
+        min-height: 180px;
+        max-height: 220px;
+        overflow: auto;
+        padding: 9px;
+        white-space: pre-wrap;
+      }
+
+      .mini {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 0.83rem;
+      }
+
+      @media (max-width: 1000px) {
+        .grid {
           grid-template-columns: 1fr;
         }
-
-        .charts-grid {
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .charts,
+        .infer-grid {
           grid-template-columns: 1fr;
         }
-
-        .button-group.all-buttons {
-          grid-template-columns: 1fr 1fr;
-        }
-      }
-
-      @media (max-width: 768px) {
-        body {
-          padding: 1rem;
-        }
-
-        .card {
-          padding: 1.5rem;
-        }
-
-        .metrics-grid {
-          grid-template-columns: 1fr;
-        }
-
-        input[type='number'],
-        input[type='text'],
-        input[type='range'] {
-          font-size: 16px; /* Prevents zoom on mobile */
-        }
-      }
-
-      .footer-note {
-        text-align: center;
-        color: #999;
-        font-size: 0.85rem;
-        margin-top: 2rem;
-        padding-top: 1rem;
-        border-top: 1px solid #ddd;
       }
     </style>
   </head>
   <body>
-    <div class="container">
-      <h1>🧠 Neural Network Training Dashboard</h1>
+    <main class="wrap">
+      <section class="hero">
+        <h1>MNIST CNN Training Dashboard</h1>
+        <p>Train a CNN with rustpy-ml, manage checkpoints, and draw digits for live inference.</p>
+        <span id="statusPill" class="status-pill">idle</span>
+      </section>
 
-      <div class="main-grid">
-        <!-- Left: Configuration Panel -->
-        <div class="card">
-          <h2>⚙️ Configuration</h2>
-
-          <div class="form-group">
-            <label for="hidden_layers">Hidden Layers (1-4)</label>
-            <input type="number" id="hidden_layers" min="1" max="4" value="2" />
+      <section class="grid">
+        <aside class="card">
+          <h2>Training Controls</h2>
+          <div class="controls">
+            <label>Conv1 Channels <input id="conv1" type="number" min="4" step="1" value="16" /></label>
+            <label>Conv2 Channels <input id="conv2" type="number" min="8" step="1" value="32" /></label>
+            <label>Kernel Size <input id="kernel" type="number" min="1" step="2" value="3" /></label>
+            <label>Dense Units <input id="dense" type="number" min="8" step="1" value="64" /></label>
+            <label>Epochs <input id="epochs" type="number" min="1" step="1" value="5" /></label>
+            <label>Learning Rate <input id="lr" type="number" min="0.00001" step="0.0001" value="0.001" /></label>
+            <label>Batch Size <input id="batch" type="number" min="8" step="8" value="64" /></label>
           </div>
 
-          <div class="form-group">
-            <label for="nodes_per_layer">Nodes per Layer (comma-separated)</label>
-            <input type="text" id="nodes_per_layer" placeholder="e.g., 32,16,8" value="32,16" />
-            <small style="color: #999; display: block; margin-top: 0.3rem"> Enter comma-separated values matching the number of hidden layers </small>
+          <div class="btn-row" style="margin-top: 10px">
+            <button id="startBtn" class="primary" onclick="startTraining()">Start</button>
+            <button id="pauseBtn" class="secondary" onclick="pauseTraining()" disabled>Pause</button>
+            <button id="resumeBtn" class="success" onclick="resumeTraining()" disabled>Resume</button>
+            <button id="stopBtn" class="danger" onclick="stopTraining()" disabled>Stop</button>
+            <button id="resetBtn" class="secondary" onclick="resetTraining()">Reset</button>
+            <button id="downloadBtn" class="secondary" onclick="downloadModel()" disabled>Download</button>
           </div>
 
-          <div class="form-group">
-            <label for="epochs">Epochs</label>
-            <input type="number" id="epochs" min="10" max="1000" value="50" />
+          <h2 style="margin-top: 14px">Model Upload / Reload</h2>
+          <label
+            >Checkpoint File
+            <input id="modelFile" type="file" accept=".pt,.pth,.bin" />
+          </label>
+          <div class="btn-row" style="margin-top: 8px">
+            <button class="secondary" onclick="uploadModel()">Upload</button>
+            <button class="secondary" onclick="loadModel()">Load</button>
           </div>
+          <div class="mini" id="modelInfo">No model loaded.</div>
+        </aside>
 
-          <div class="form-group">
-            <label for="learning_rate">Learning Rate <span class="slider-value" id="lr-display">0.01</span></label>
-            <input type="range" id="learning_rate" min="0.0001" max="0.1" step="0.0001" value="0.01" />
-          </div>
-
-          <div class="form-group">
-            <label for="batch_size">Batch Size <span class="slider-value" id="bs-display">32</span></label>
-            <input type="range" id="batch_size" min="4" max="128" step="4" value="32" />
-          </div>
-
-          <!-- Status Display -->
-          <div class="status-display">
-            <div class="status-label">Current Status</div>
-            <div class="status-value idle" id="status-badge">Idle</div>
-            <div class="error-message" id="error-display"></div>
-          </div>
-
-          <!-- Control Buttons -->
-          <div class="button-group all-buttons">
-            <button class="btn-primary" id="btn-start" onclick="startTraining()">Start</button>
-            <button class="btn-secondary" id="btn-pause" onclick="pauseTraining()" disabled>Pause</button>
-            <button class="btn-secondary" id="btn-resume" onclick="resumeTraining()" disabled>Resume</button>
-            <button class="btn-danger" id="btn-stop" onclick="stopTraining()" disabled>Stop</button>
-            <button class="btn-reset" id="btn-reset" onclick="resetTraining()" disabled>Reset</button>
-          </div>
-        </div>
-
-        <!-- Right: Metrics Display -->
-        <div class="card">
-          <h2>📊 Live Metrics</h2>
-
-          <div class="metrics-grid">
-            <div class="metric-box">
-              <div class="metric-label">Current Epoch</div>
-              <div class="metric-value" id="metric-epoch">0</div>
+        <section>
+          <div class="metrics">
+            <div class="metric">
+              <div class="label">Epoch</div>
+              <div class="value" id="epochValue">0</div>
             </div>
-            <div class="metric-box secondary">
-              <div class="metric-label">Best Accuracy</div>
-              <div class="metric-value" id="metric-accuracy">0%</div>
+            <div class="metric">
+              <div class="label">Best Loss</div>
+              <div class="value" id="lossValue">-</div>
+            </div>
+            <div class="metric">
+              <div class="label">Best Val Accuracy</div>
+              <div class="value" id="accValue">-</div>
+            </div>
+            <div class="metric">
+              <div class="label">Elapsed</div>
+              <div class="value" id="timeValue">0.0s</div>
             </div>
           </div>
 
-          <div class="metrics-grid">
-            <div class="metric-box">
-              <div class="metric-label">Best Loss</div>
-              <div class="metric-value" id="metric-loss">-</div>
+          <div class="charts">
+            <div class="card">
+              <h2>Loss Curve</h2>
+              <canvas id="lossChart" height="145"></canvas>
             </div>
-            <div class="metric-box secondary">
-              <div class="metric-label">Elapsed Time</div>
-              <div class="metric-value" id="metric-time">0s</div>
+            <div class="card">
+              <h2>Validation Accuracy</h2>
+              <canvas id="accChart" height="145"></canvas>
             </div>
           </div>
 
-          <div id="model-path-container" style="display: none; margin-top: 1rem">
-            <label style="color: #666; font-weight: 600">Model Ready for Download</label>
-            <button class="btn-primary" style="margin-top: 0.75rem; width: 100%" onclick="downloadModel()">📥 Download Model</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Charts -->
-      <div class="card">
-        <h2>📈 Training Progress</h2>
-        <div class="charts-grid">
-          <div>
-            <h3 style="font-size: 1rem; color: #555; margin-bottom: 0.5rem">Training Loss</h3>
-            <div class="chart-container">
-              <canvas id="lossChart"></canvas>
+          <div class="card" style="margin-bottom: 10px">
+            <h2>Draw a Digit for Inference</h2>
+            <div class="infer-grid">
+              <div class="canvas-box">
+                <canvas id="drawCanvas" width="280" height="280"></canvas>
+                <div class="btn-row" style="width: 100%">
+                  <button class="secondary" onclick="clearDrawing()">Clear</button>
+                  <button class="primary" onclick="inferDrawing()">Infer</button>
+                </div>
+                <div class="preview-row">
+                  <canvas id="previewCanvas" width="28" height="28"></canvas>
+                  <span>Auto-centered + normalized 28x28</span>
+                </div>
+              </div>
+              <div>
+                <div class="metrics" style="grid-template-columns: 1fr 1fr; margin-bottom: 8px">
+                  <div class="metric">
+                    <div class="label">Predicted Digit</div>
+                    <div class="value" id="predValue">-</div>
+                  </div>
+                  <div class="metric">
+                    <div class="label">Confidence</div>
+                    <div class="value" id="confValue">-</div>
+                  </div>
+                </div>
+                <div class="card" style="padding: 10px">
+                  <h2 style="margin-bottom: 6px">Class Probabilities</h2>
+                  <canvas id="probChart" height="170"></canvas>
+                </div>
+              </div>
             </div>
           </div>
-          <div>
-            <h3 style="font-size: 1rem; color: #555; margin-bottom: 0.5rem">Validation Accuracy</h3>
-            <div class="chart-container">
-              <canvas id="accuracyChart"></canvas>
-            </div>
+
+          <div class="card">
+            <h2>Training Logs</h2>
+            <div id="logBox" class="logs"></div>
           </div>
-        </div>
-      </div>
-
-      <!-- Training Logs Terminal -->
-      <div class="card">
-        <h2>📺 Training Logs</h2>
-        <div
-          style="
-            background: #1e1e1e;
-            color: #00ff00;
-            padding: 1rem;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9rem;
-            height: 200px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            line-height: 1.5;
-          "
-          id="logs-terminal"
-        >
-          Waiting for training to start...
-        </div>
-      </div>
-
-      <div class="footer-note">
-        💡 Tip: This dashboard trains a neural network on the Iris dataset. Configure the network architecture and hyperparameters, then click "Start" to begin
-        training. You can pause, resume, or stop at any time.
-      </div>
-    </div>
+        </section>
+      </section>
+    </main>
 
     <script>
-      // Chart.js instances
-      let lossChart, accuracyChart;
-      let pollingInterval;
       let currentStatus = 'idle';
+      let pollingTimer = null;
+      let lastLogLen = 0;
 
-      // Initialize charts
-      function initCharts() {
-        const lossCtx = document.getElementById('lossChart').getContext('2d');
-        lossChart = new Chart(lossCtx, {
-          type: 'line',
-          data: {
-            labels: [],
-            datasets: [
-              {
-                label: 'Training Loss',
-                data: [],
-                borderColor: '#ff6b35',
-                backgroundColor: 'rgba(255, 107, 53, 0.1)',
-                tension: 0.4,
-                fill: true,
-                pointBackgroundColor: '#ff6b35',
-                pointBorderColor: '#fff',
-                pointBorderWidth: 2,
-                pointRadius: 4,
-                pointHoverRadius: 6,
-              },
-            ],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: true, position: 'top' },
-            },
-            scales: {
-              y: { beginAtZero: true, max: 3 },
-            },
-          },
-        });
+      let lossChart;
+      let accChart;
+      let probChart;
 
-        const accuracyCtx = document.getElementById('accuracyChart').getContext('2d');
-        accuracyChart = new Chart(accuracyCtx, {
-          type: 'line',
-          data: {
-            labels: [],
-            datasets: [
-              {
-                label: 'Validation Accuracy',
-                data: [],
-                borderColor: '#4caf50',
-                backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                tension: 0.4,
-                fill: true,
-                pointBackgroundColor: '#4caf50',
-                pointBorderColor: '#fff',
-                pointBorderWidth: 2,
-                pointRadius: 4,
-                pointHoverRadius: 6,
-              },
-            ],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: { display: true, position: 'top' },
-            },
-            scales: {
-              y: {
-                beginAtZero: true,
-                max: 1.0,
-                ticks: {
-                  callback: function (value) {
-                    return (value * 100).toFixed(0) + '%';
-                  },
-                },
-              },
-            },
-          },
-        });
+      const drawCanvas = document.getElementById('drawCanvas');
+      const drawCtx = drawCanvas.getContext('2d');
+      const previewCanvas = document.getElementById('previewCanvas');
+      const previewCtx = previewCanvas.getContext('2d', { willReadFrequently: true });
+
+      let isDrawing = false;
+
+      function initCanvas() {
+        drawCtx.fillStyle = 'black';
+        drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+        drawCtx.lineCap = 'round';
+        drawCtx.lineJoin = 'round';
+        drawCtx.strokeStyle = 'white';
+        drawCtx.lineWidth = 18;
+
+        previewCtx.fillStyle = 'black';
+        previewCtx.fillRect(0, 0, 28, 28);
       }
 
-      // Update charts
-      function updateCharts(trainLosses, valAccuracies) {
-        const epochs = Array.from({ length: trainLosses.length }, (_, i) => i + 1);
-
-        lossChart.data.labels = epochs;
-        lossChart.data.datasets[0].data = trainLosses;
-        lossChart.update('none');
-
-        accuracyChart.data.labels = epochs;
-        accuracyChart.data.datasets[0].data = valAccuracies;
-        accuracyChart.update('none');
-      }
-
-      // Slider value displays
-      document.getElementById('learning_rate').addEventListener('input', e => {
-        document.getElementById('lr-display').textContent = parseFloat(e.target.value).toFixed(4);
-      });
-
-      document.getElementById('batch_size').addEventListener('input', e => {
-        document.getElementById('bs-display').textContent = e.target.value;
-      });
-
-      // API calls
-      async function startTraining() {
-        const hidden_layers = parseInt(document.getElementById('hidden_layers').value);
-        const nodes_str = document.getElementById('nodes_per_layer').value;
-        const nodes_per_layer = nodes_str.split(',').map(n => parseInt(n.trim()));
-        const epochs = parseInt(document.getElementById('epochs').value);
-        const learning_rate = parseFloat(document.getElementById('learning_rate').value);
-        const batch_size = parseInt(document.getElementById('batch_size').value);
-
-        // Validation
-        if (nodes_per_layer.length !== hidden_layers) {
-          showError(`Number of node values (${nodes_per_layer.length}) must match hidden layers (${hidden_layers})`);
-          return;
-        }
-
-        const request = {
-          hidden_layers,
-          nodes_per_layer,
-          epochs,
-          learning_rate,
-          batch_size,
+      function setupDrawingEvents() {
+        const getPos = e => {
+          const rect = drawCanvas.getBoundingClientRect();
+          const p = e.touches ? e.touches[0] : e;
+          return {
+            x: ((p.clientX - rect.left) / rect.width) * drawCanvas.width,
+            y: ((p.clientY - rect.top) / rect.height) * drawCanvas.height,
+          };
         };
 
-        try {
-          const response = await fetch('/train/start', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(request),
-          });
+        const start = e => {
+          e.preventDefault();
+          isDrawing = true;
+          const { x, y } = getPos(e);
+          drawCtx.beginPath();
+          drawCtx.moveTo(x, y);
+        };
 
-          if (response.ok) {
-            currentStatus = 'running';
-            updateUI();
-            startPolling();
-          } else {
-            const error = await response.json();
-            showError(error.error || 'Failed to start training');
-          }
-        } catch (err) {
-          showError(`Network error: ${err.message}`);
-        }
+        const move = e => {
+          if (!isDrawing) return;
+          e.preventDefault();
+          const { x, y } = getPos(e);
+          drawCtx.lineTo(x, y);
+          drawCtx.stroke();
+        };
+
+        const end = e => {
+          if (!isDrawing) return;
+          e.preventDefault();
+          isDrawing = false;
+          drawCtx.closePath();
+        };
+
+        drawCanvas.addEventListener('mousedown', start);
+        drawCanvas.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', end);
+
+        drawCanvas.addEventListener('touchstart', start, { passive: false });
+        drawCanvas.addEventListener('touchmove', move, { passive: false });
+        window.addEventListener('touchend', end, { passive: false });
       }
 
-      async function pauseTraining() {
-        try {
-          const response = await fetch('/train/pause', { method: 'POST' });
-          if (response.ok) {
-            currentStatus = 'paused';
-            updateUI();
-          } else {
-            const error = await response.json();
-            showError(error.error || 'Failed to pause');
-          }
-        } catch (err) {
-          showError(`Network error: ${err.message}`);
-        }
+      function clearDrawing() {
+        drawCtx.fillStyle = 'black';
+        drawCtx.fillRect(0, 0, drawCanvas.width, drawCanvas.height);
+        previewCtx.fillStyle = 'black';
+        previewCtx.fillRect(0, 0, 28, 28);
+        document.getElementById('predValue').textContent = '-';
+        document.getElementById('confValue').textContent = '-';
+        updateProbChart(new Array(10).fill(0));
       }
 
-      async function resumeTraining() {
-        try {
-          const response = await fetch('/train/resume', { method: 'POST' });
-          if (response.ok) {
-            currentStatus = 'running';
-            updateUI();
-            startPolling();
-          } else {
-            const error = await response.json();
-            showError(error.error || 'Failed to resume');
-          }
-        } catch (err) {
-          showError(`Network error: ${err.message}`);
-        }
-      }
+      function preprocessDrawing() {
+        const temp = document.createElement('canvas');
+        temp.width = drawCanvas.width;
+        temp.height = drawCanvas.height;
+        const tctx = temp.getContext('2d', { willReadFrequently: true });
+        tctx.fillStyle = 'black';
+        tctx.fillRect(0, 0, temp.width, temp.height);
+        tctx.drawImage(drawCanvas, 0, 0);
 
-      async function stopTraining() {
-        try {
-          const response = await fetch('/train/stop', { method: 'POST' });
-          if (response.ok) {
-            currentStatus = 'stopped';
-            updateUI();
-            stopPolling();
-          } else {
-            const error = await response.json();
-            showError(error.error || 'Failed to stop');
-          }
-        } catch (err) {
-          showError(`Network error: ${err.message}`);
-        }
-      }
+        const data = tctx.getImageData(0, 0, temp.width, temp.height);
+        const pix = data.data;
 
-      async function resetTraining() {
-        try {
-          const response = await fetch('/train/reset', { method: 'POST' });
-          if (response.ok) {
-            currentStatus = 'idle';
-            updateUI();
-            clearCharts();
-            document.getElementById('model-path-container').style.display = 'none';
-          } else {
-            const error = await response.json();
-            showError(error.error || 'Failed to reset');
-          }
-        } catch (err) {
-          showError(`Network error: ${err.message}`);
-        }
-      }
+        let minX = temp.width,
+          minY = temp.height,
+          maxX = 0,
+          maxY = 0;
+        let found = false;
 
-      async function fetchStatus() {
-        try {
-          const response = await fetch('/train/status');
-          const data = await response.json();
-
-          const metrics = data.metrics || {};
-          const currentEpoch = Number.isFinite(Number(metrics.current_epoch)) ? Number(metrics.current_epoch) : 0;
-          const bestAccuracy = Number.isFinite(Number(metrics.best_accuracy)) ? Number(metrics.best_accuracy) : 0;
-          const bestLossRaw = Number(metrics.best_loss);
-          const hasBestLoss = Number.isFinite(bestLossRaw);
-          const elapsedSeconds = Number.isFinite(Number(metrics.elapsed_seconds)) ? Number(metrics.elapsed_seconds) : 0;
-          const trainLossHistory = Array.isArray(metrics.train_loss_history) ? metrics.train_loss_history : [];
-          const valAccuracyHistory = Array.isArray(metrics.val_accuracy_history) ? metrics.val_accuracy_history : [];
-          const trainingLogs = Array.isArray(metrics.training_logs) ? metrics.training_logs : [];
-
-          // Update metrics
-          document.getElementById('metric-epoch').textContent = currentEpoch;
-          document.getElementById('metric-accuracy').textContent = (bestAccuracy * 100).toFixed(1) + '%';
-          document.getElementById('metric-loss').textContent = hasBestLoss ? bestLossRaw.toFixed(4) : '-';
-          document.getElementById('metric-time').textContent = Math.floor(elapsedSeconds) + 's';
-
-          // Update logs terminal
-          if (trainingLogs.length > 0) {
-            const logsContent = trainingLogs.join('\n');
-            document.getElementById('logs-terminal').textContent = logsContent;
-            // Auto-scroll to bottom
-            const logsEl = document.getElementById('logs-terminal');
-            logsEl.scrollTop = logsEl.scrollHeight;
-          }
-
-          // Update charts
-          if (trainLossHistory.length > 0) {
-            updateCharts(trainLossHistory, valAccuracyHistory);
-          }
-
-          // Update status
-          const nextStatus = typeof data.status === 'string' ? data.status.toLowerCase() : currentStatus;
-          currentStatus = nextStatus;
-          updateUI();
-
-          // Handle completion
-          if (currentStatus === 'completed' || currentStatus === 'stopped') {
-            stopPolling();
-            if (data.model_path) {
-              document.getElementById('model-path-container').style.display = 'block';
+        for (let y = 0; y < temp.height; y++) {
+          for (let x = 0; x < temp.width; x++) {
+            const idx = (y * temp.width + x) * 4;
+            const v = pix[idx];
+            if (v > 15) {
+              found = true;
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
             }
           }
-
-          // Handle error
-          if (data.error_message) {
-            showError(data.error_message);
-            stopPolling();
-          } else {
-            clearError();
-          }
-        } catch (err) {
-          showError(`Polling error: ${err.message}`);
         }
+
+        if (!found) {
+          return new Array(784).fill(0);
+        }
+
+        const boxW = Math.max(1, maxX - minX + 1);
+        const boxH = Math.max(1, maxY - minY + 1);
+        const side = Math.max(boxW, boxH);
+
+        const crop = document.createElement('canvas');
+        crop.width = side;
+        crop.height = side;
+        const cctx = crop.getContext('2d', { willReadFrequently: true });
+        cctx.fillStyle = 'black';
+        cctx.fillRect(0, 0, side, side);
+
+        const offsetX = Math.floor((side - boxW) / 2);
+        const offsetY = Math.floor((side - boxH) / 2);
+        cctx.drawImage(temp, minX, minY, boxW, boxH, offsetX, offsetY, boxW, boxH);
+
+        previewCtx.fillStyle = 'black';
+        previewCtx.fillRect(0, 0, 28, 28);
+        previewCtx.drawImage(crop, 0, 0, side, side, 4, 4, 20, 20);
+
+        const out = previewCtx.getImageData(0, 0, 28, 28).data;
+        const pixels = [];
+        for (let i = 0; i < out.length; i += 4) {
+          pixels.push(out[i] / 255.0);
+        }
+        return pixels;
       }
 
-      function startPolling() {
-        clearError();
-        stopPolling();
-        fetchStatus();
-        pollingInterval = setInterval(fetchStatus, 300);
+      function initCharts() {
+        const lossCtx = document.getElementById('lossChart').getContext('2d');
+        const accCtx = document.getElementById('accChart').getContext('2d');
+        const probCtx = document.getElementById('probChart').getContext('2d');
+
+        lossChart = new Chart(lossCtx, {
+          type: 'line',
+          data: { labels: [], datasets: [{ label: 'Train Loss', data: [], borderColor: '#ee6c4d', tension: 0.25 }] },
+          options: { responsive: true, scales: { y: { beginAtZero: true } } },
+        });
+
+        accChart = new Chart(accCtx, {
+          type: 'line',
+          data: { labels: [], datasets: [{ label: 'Val Acc', data: [], borderColor: '#2a9d8f', tension: 0.25 }] },
+          options: {
+            responsive: true,
+            scales: { y: { min: 0, max: 100 } },
+            plugins: { tooltip: { callbacks: { label: ctx => `${ctx.parsed.y.toFixed(2)}%` } } },
+          },
+        });
+
+        probChart = new Chart(probCtx, {
+          type: 'bar',
+          data: {
+            labels: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+            datasets: [{ label: 'Probability %', data: new Array(10).fill(0), backgroundColor: '#335c67' }],
+          },
+          options: { responsive: true, scales: { y: { min: 0, max: 100 } } },
+        });
       }
 
-      function stopPolling() {
-        if (pollingInterval) {
-          clearInterval(pollingInterval);
-          pollingInterval = null;
-        }
+      function updateProbChart(probs) {
+        const pct = probs.map(v => v * 100);
+        probChart.data.datasets[0].data = pct;
+        probChart.update();
       }
 
       function updateUI() {
-        const badge = document.getElementById('status-badge');
-        const btnStart = document.getElementById('btn-start');
-        const btnPause = document.getElementById('btn-pause');
-        const btnResume = document.getElementById('btn-resume');
-        const btnStop = document.getElementById('btn-stop');
-        const btnReset = document.getElementById('btn-reset');
+        const running = currentStatus === 'running';
+        const paused = currentStatus === 'paused';
 
-        badge.textContent = currentStatus.toUpperCase();
-        badge.className = `status-value ${currentStatus}`;
-
-        btnStart.disabled = currentStatus !== 'idle';
-        btnPause.disabled = currentStatus !== 'running';
-        btnResume.disabled = currentStatus !== 'paused';
-        btnStop.disabled = !['running', 'paused'].includes(currentStatus);
-        btnReset.disabled = ['running', 'paused'].includes(currentStatus);
+        document.getElementById('statusPill').textContent = currentStatus;
+        document.getElementById('startBtn').disabled = running || paused;
+        document.getElementById('pauseBtn').disabled = !running;
+        document.getElementById('resumeBtn').disabled = !paused;
+        document.getElementById('stopBtn').disabled = !(running || paused);
       }
 
-      function showError(message, isError = true) {
-        const errorEl = document.getElementById('error-display');
-        errorEl.textContent = message;
-        errorEl.classList.add('show');
-        if (!isError) {
-          errorEl.style.background = '#e8f5e9';
-          errorEl.style.color = '#2e7d32';
-          setTimeout(() => {
-            errorEl.classList.remove('show');
-            errorEl.style.background = '#ffebee';
-            errorEl.style.color = '#c62828';
-          }, 3000);
+      async function startTraining() {
+        const payload = {
+          conv_channels_1: Number(document.getElementById('conv1').value),
+          conv_channels_2: Number(document.getElementById('conv2').value),
+          kernel_size: Number(document.getElementById('kernel').value),
+          dense_units: Number(document.getElementById('dense').value),
+          epochs: Number(document.getElementById('epochs').value),
+          learning_rate: Number(document.getElementById('lr').value),
+          batch_size: Number(document.getElementById('batch').value),
+        };
+
+        const res = await fetch('/train/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
         }
+
+        appendLog(data.message || 'Training started');
+        startPolling();
+        fetchStatus();
       }
 
-      function clearError() {
-        const errorEl = document.getElementById('error-display');
-        errorEl.textContent = '';
-        errorEl.classList.remove('show');
+      async function pauseTraining() {
+        await callSimple('/train/pause');
       }
 
-      function clearCharts() {
+      async function resumeTraining() {
+        await callSimple('/train/resume');
+      }
+
+      async function stopTraining() {
+        await callSimple('/train/stop');
+      }
+
+      async function resetTraining() {
+        const res = await fetch('/train/reset', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
         lossChart.data.labels = [];
         lossChart.data.datasets[0].data = [];
         lossChart.update();
 
-        accuracyChart.data.labels = [];
-        accuracyChart.data.datasets[0].data = [];
-        accuracyChart.update();
+        accChart.data.labels = [];
+        accChart.data.datasets[0].data = [];
+        accChart.update();
+
+        document.getElementById('logBox').textContent = '';
+        lastLogLen = 0;
+        clearDrawing();
+
+        appendLog(data.message || 'State reset');
+        await fetchStatus();
       }
 
-      function downloadModel() {
-        fetch('/train/model')
-          .then(res => res.json())
-          .then(data => {
-            if (data.error) {
-              showError(data.error);
-              return;
-            }
-            // Decode base64 and download
-            const binaryString = atob(data.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-            const blob = new Blob([bytes], { type: 'application/octet-stream' });
-            const url = window.URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = data.filename || 'iris_model.pt';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            window.URL.revokeObjectURL(url);
-            showError(`Downloaded ${data.filename}`, false); // Show success message
-          })
-          .catch(err => showError(`Download error: ${err.message}`));
+      async function callSimple(path) {
+        const res = await fetch(path, { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+        appendLog(data.message || 'ok');
+        await fetchStatus();
       }
 
-      // Initialize on page load
-      window.addEventListener('load', () => {
-        initCharts();
+      async function downloadModel() {
+        const res = await fetch('/train/model');
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
+        const binary = atob(data.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+        const blob = new Blob([bytes], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = data.filename || 'mnist_cnn_model.pt';
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      async function uploadModel() {
+        const input = document.getElementById('modelFile');
+        const file = input.files[0];
+        if (!file) {
+          alert('Choose a model file first');
+          return;
+        }
+
+        const buf = await file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = '';
+        for (const b of bytes) binary += String.fromCharCode(b);
+        const b64 = btoa(binary);
+
+        const res = await fetch('/train/model/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: b64 }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+        appendLog(data.message || 'Model uploaded');
+        await fetchStatus();
+      }
+
+      async function loadModel() {
+        const res = await fetch('/train/model/load', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+        appendLog(data.message || 'Model loaded');
+        await fetchStatus();
+      }
+
+      async function inferDrawing() {
+        const pixels = preprocessDrawing();
+        const res = await fetch('/train/infer-drawing', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pixels }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          alert(data.error);
+          return;
+        }
+
+        document.getElementById('predValue').textContent = String(data.predicted_digit);
+        document.getElementById('confValue').textContent = `${(data.confidence * 100).toFixed(2)}%`;
+        updateProbChart(data.probabilities || new Array(10).fill(0));
+      }
+
+      function appendLog(line) {
+        const box = document.getElementById('logBox');
+        box.textContent += `${line}\n`;
+        box.scrollTop = box.scrollHeight;
+      }
+
+      async function fetchStatus() {
+        const res = await fetch('/train/status');
+        const st = await res.json();
+
+        currentStatus = st.status || 'idle';
         updateUI();
-        fetchStatus();
-      });
 
-      // Cleanup on page unload
-      window.addEventListener('unload', stopPolling);
+        const metrics = st.metrics || {};
+        const trainLoss = metrics.train_loss_history || [];
+        const valAcc = metrics.val_accuracy_history || [];
+        const labels = trainLoss.map((_, i) => String(i + 1));
+
+        lossChart.data.labels = labels;
+        lossChart.data.datasets[0].data = trainLoss;
+        lossChart.update();
+
+        accChart.data.labels = labels;
+        accChart.data.datasets[0].data = valAcc.map(v => v * 100);
+        accChart.update();
+
+        document.getElementById('epochValue').textContent = String(metrics.current_epoch || 0);
+        document.getElementById('lossValue').textContent = Number.isFinite(metrics.best_loss) ? Number(metrics.best_loss).toFixed(4) : '-';
+        document.getElementById('accValue').textContent = Number.isFinite(metrics.best_accuracy) ? `${(metrics.best_accuracy * 100).toFixed(2)}%` : '-';
+        document.getElementById('timeValue').textContent = `${(metrics.elapsed_seconds || 0).toFixed(1)}s`;
+
+        const logs = metrics.training_logs || [];
+        if (logs.length > lastLogLen) {
+          const newLogs = logs.slice(lastLogLen);
+          for (const line of newLogs) appendLog(line);
+          lastLogLen = logs.length;
+        }
+
+        const modelLoaded = !!st.model_loaded;
+        document.getElementById('downloadBtn').disabled = !st.model_data;
+        document.getElementById('modelInfo').textContent = modelLoaded ? `Model loaded (${st.model_source || 'unknown source'})` : 'No model loaded.';
+
+        if (st.error_message) appendLog(`ERROR: ${st.error_message}`);
+
+        if (currentStatus === 'completed' || currentStatus === 'stopped') {
+          stopPolling();
+        }
+      }
+
+      function startPolling() {
+        stopPolling();
+        pollingTimer = setInterval(fetchStatus, 600);
+      }
+
+      function stopPolling() {
+        if (pollingTimer) {
+          clearInterval(pollingTimer);
+          pollingTimer = null;
+        }
+      }
+
+      initCanvas();
+      setupDrawingEvents();
+      initCharts();
+      fetchStatus();
+      startPolling();
     </script>
   </body>
 </html>
