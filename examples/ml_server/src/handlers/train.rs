@@ -6,7 +6,7 @@
 use rustpy_ml::prelude::*;
 use unipotato::{Request, Response, handler::{json, text}, post, get};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 use once_cell::sync::Lazy;
 use base64::Engine as _;
@@ -52,6 +52,13 @@ fn get_flags() -> Arc<TrainingControlFlags> {
     CONTROL_FLAGS.clone()
 }
 
+fn lock_state<'a>(state: &'a Arc<Mutex<TrainingState>>) -> MutexGuard<'a, TrainingState> {
+    match state.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// POST /train/start
 /// Start training with given hyperparameters
 #[post("/start")]
@@ -90,7 +97,7 @@ pub async fn start_training(req: Request) -> Response {
     }
 
     let state = get_state();
-    let mut st = state.lock().unwrap();
+    let mut st = lock_state(&state);
 
     // Check if already training
     match st.status {
@@ -142,7 +149,7 @@ pub async fn start_training(req: Request) -> Response {
 #[post("/pause")]
 pub async fn pause_training(_req: Request) -> Response {
     let state = get_state();
-    let mut st = state.lock().unwrap();
+    let mut st = lock_state(&state);
 
     match st.status {
         TrainingStatus::Running => {
@@ -166,7 +173,7 @@ pub async fn pause_training(_req: Request) -> Response {
 #[post("/resume")]
 pub async fn resume_training(_req: Request) -> Response {
     let state = get_state();
-    let mut st = state.lock().unwrap();
+    let mut st = lock_state(&state);
 
     match st.status {
         TrainingStatus::Paused => {
@@ -190,7 +197,7 @@ pub async fn resume_training(_req: Request) -> Response {
 #[post("/stop")]
 pub async fn stop_training(_req: Request) -> Response {
     let state = get_state();
-    let mut st = state.lock().unwrap();
+    let mut st = lock_state(&state);
 
     match st.status {
         TrainingStatus::Running | TrainingStatus::Paused => {
@@ -214,7 +221,7 @@ pub async fn stop_training(_req: Request) -> Response {
 #[get("/status")]
 pub async fn get_status(_req: Request) -> Response {
     let state = get_state();
-    let st = state.lock().unwrap();
+    let st = lock_state(&state);
     json(st.clone())
 }
 
@@ -223,7 +230,7 @@ pub async fn get_status(_req: Request) -> Response {
 #[post("/reset")]
 pub async fn reset_training(_req: Request) -> Response {
     let state = get_state();
-    let mut st = state.lock().unwrap();
+    let mut st = lock_state(&state);
 
     match st.status {
         TrainingStatus::Running | TrainingStatus::Paused => {
@@ -248,7 +255,7 @@ pub async fn reset_training(_req: Request) -> Response {
 #[get("/model")]
 pub async fn download_model(_req: Request) -> Response {
     let state = get_state();
-    let st = state.lock().unwrap();
+    let st = lock_state(&state);
 
     if let Some(model_data) = &st.model_data {
         let encoded = base64::engine::general_purpose::STANDARD.encode(model_data);
@@ -276,11 +283,11 @@ async fn run_training(
 ) {
     let start_time = Instant::now();
     
-    // Initialize Python runtime
-    if let Err(_) = rustpy_ml::init() {
-        let mut st = state.lock().unwrap();
+    // Initialize Python runtime and preload ML dependencies
+    if let Err(e) = rustpy_ml::init_with_ml(&["numpy", "torch", "sklearn"]) {
+        let mut st = lock_state(&state);
         st.status = TrainingStatus::Completed;
-        st.error_message = Some("Failed to initialize Python runtime".to_string());
+        st.error_message = Some(format!("Failed to initialize Python runtime: {}", e));
         return;
     }
 
@@ -296,19 +303,16 @@ async fn run_training(
 
     // Define training class with per-epoch methods
     let define_trainer = py_exec!(r#"
-import os
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-import io
-import base64
-
 class IrisTrainer:
     def __init__(self, nodes, lr, batch_size, seed=42):
+        import numpy as np
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from sklearn.datasets import load_iris
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import StandardScaler
+        
         np.random.seed(seed)
         torch.manual_seed(seed)
         
@@ -364,6 +368,10 @@ class IrisTrainer:
         self.batch_size = int(batch_size)
     
     def train_epoch(self, epoch):
+        import torch
+        import base64
+        import io
+        
         self.model.train()
         idx = torch.randperm(self.X_train_t.size(0))
         x_epoch = self.X_train_t[idx]
@@ -407,6 +415,8 @@ class IrisTrainer:
         return (float(train_loss), float(val_acc))
     
     def get_final_results(self):
+        import torch
+        
         with torch.no_grad():
             test_logits = self.model(self.X_test_t)
             test_pred = torch.argmax(test_logits, dim=1)
@@ -423,7 +433,7 @@ class IrisTrainer:
 "#);
 
     if let Err(e) = define_trainer {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(&state);
         st.status = TrainingStatus::Completed;
         st.error_message = Some(format!("Training setup error: {}", e));
         return;
@@ -438,7 +448,7 @@ class IrisTrainer:
     );
 
     if let Err(e) = py_exec!(init_code.as_str()) {
-        let mut st = state.lock().unwrap();
+        let mut st = lock_state(&state);
         st.status = TrainingStatus::Completed;
         st.error_message = Some(format!("Trainer init error: {}", e));
         return;
@@ -448,7 +458,7 @@ class IrisTrainer:
     for epoch in 0..config.epochs {
         // Check stop flag
         if flags.should_stop() {
-            let mut st = state.lock().unwrap();
+            let mut st = lock_state(&state);
             st.status = TrainingStatus::Stopped;
             st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
             break;
@@ -463,15 +473,10 @@ class IrisTrainer:
         let epoch_code = format!("trainer.train_epoch({})", epoch);
         match python!(-> (f64, f64), epoch_code.as_str()) {
             Ok((train_loss, val_acc)) => {
-                let mut st = state.lock().unwrap();
+                let mut st = lock_state(&state);
                 st.metrics.current_epoch = epoch + 1;
-                if st.metrics.train_loss_history.is_empty() {
-                    st.metrics.train_loss_history.push(train_loss);
-                    st.metrics.val_accuracy_history.push(val_acc);
-                } else {
-                    st.metrics.train_loss_history[epoch] = train_loss;
-                    st.metrics.val_accuracy_history[epoch] = val_acc;
-                }
+                st.metrics.train_loss_history.push(train_loss);
+                st.metrics.val_accuracy_history.push(val_acc);
                 st.metrics.elapsed_seconds = start_time.elapsed().as_secs_f64();
                 
                 let log_msg = format!("[Epoch {}/{}] Loss: {:.4} | Val Acc: {:.2}%", 
@@ -479,7 +484,7 @@ class IrisTrainer:
                 st.metrics.training_logs.push(log_msg);
             }
             Err(e) => {
-                let mut st = state.lock().unwrap();
+                let mut st = lock_state(&state);
                 st.status = TrainingStatus::Completed;
                 st.error_message = Some(format!("Epoch {} error: {}", epoch, e));
                 return;
@@ -490,7 +495,7 @@ class IrisTrainer:
     // Get final results
     match python!(-> (Vec<f64>, Vec<f64>, f64, f64, f64, String), "trainer.get_final_results()") {
         Ok((train_losses, val_accs, best_loss, best_acc, _test_acc, model_b64)) => {
-            let mut st = state.lock().unwrap();
+            let mut st = lock_state(&state);
             st.status = TrainingStatus::Completed;
             st.metrics.current_epoch = train_losses.len();
             st.metrics.best_loss = best_loss;
@@ -509,7 +514,7 @@ class IrisTrainer:
                 best_loss, best_acc * 100.0));
         }
         Err(e) => {
-            let mut st = state.lock().unwrap();
+            let mut st = lock_state(&state);
             st.status = TrainingStatus::Completed;
             st.error_message = Some(format!("Final results error: {}", e));
         }
