@@ -1,4 +1,5 @@
 use unipotato::route::{Router, Handler, collect_routes, find_handler_with_params, register_route, mount};
+use unipotato::Query;
 use hyper::{Method, Response};
 use std::sync::Arc;
 
@@ -113,6 +114,24 @@ fn test_parameterized_route_keeps_url_encoded_segment_verbatim() {
     let matched = find_handler_with_params(&Method::GET, "/files/hello%20world")
         .expect("expected route match");
     assert_eq!(matched.params.get("name"), Some(&"hello%20world".to_string()));
+}
+
+#[test]
+fn test_parameterized_route_and_query_parsing_together() {
+    register_route(
+        Method::GET,
+        "/users/<id>".to_string(),
+        "^/users/[^/]+$".to_string(),
+        make_handler("matched"),
+    );
+
+    let uri: hyper::Uri = "/users/42?expand=true&lang=en".parse().unwrap();
+    let matched = find_handler_with_params(&Method::GET, uri.path()).expect("expected route match");
+    let query = Query::from_uri(&uri);
+
+    assert_eq!(matched.params.get("id"), Some(&"42".to_string()));
+    assert_eq!(query.get("expand"), Some(&"true".to_string()));
+    assert_eq!(query.get("lang"), Some(&"en".to_string()));
 }
 
 // ============ HTTP Method Dispatch Tests ============
