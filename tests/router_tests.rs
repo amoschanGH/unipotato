@@ -2,6 +2,7 @@ use unipotato::route::{Router, Handler, collect_routes, find_handler_with_params
 use unipotato::Query;
 use hyper::{Method, Response};
 use std::sync::Arc;
+use std::thread;
 
 fn make_handler(response_body: &'static str) -> Handler {
     Arc::new(move |_req| {
@@ -148,4 +149,39 @@ fn test_method_mismatch_returns_none_for_handler_lookup() {
 
     assert!(find_handler_with_params(&Method::POST, path).is_none());
     assert!(find_handler_with_params(&Method::GET, path).is_some());
+}
+
+// ============ Concurrency Stress Tests ============
+
+#[test]
+fn test_concurrent_route_registration_and_lookup_stress() {
+    let workers = 16;
+    let mut joins = Vec::with_capacity(workers);
+
+    for i in 0..workers {
+        joins.push(thread::spawn(move || {
+            let path = format!("/concurrent_stress_{}", i);
+            register_route(
+                Method::GET,
+                path.clone(),
+                simple_pattern(&path),
+                make_handler("ok"),
+            );
+
+            let matched = find_handler_with_params(&Method::GET, &path);
+            assert!(matched.is_some(), "route lookup failed for {}", path);
+        }));
+    }
+
+    for j in joins {
+        j.join().expect("worker thread panicked");
+    }
+
+    let routes = collect_routes();
+    let present = routes
+        .iter()
+        .filter(|r| r.path.starts_with("/concurrent_stress_"))
+        .count();
+
+    assert!(present >= workers, "expected at least {workers} stress routes, got {present}");
 }
