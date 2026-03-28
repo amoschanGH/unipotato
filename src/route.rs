@@ -1,6 +1,7 @@
 use hyper::{Response, Method, body::Incoming, StatusCode};
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use regex::Regex;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
@@ -30,6 +31,7 @@ struct RouteInfo {
     pattern: Regex,
     param_names: Vec<String>,  // Store parameter names like ["id", "post_id"]
     handler: Handler,
+    is_static: bool,  // True if route has no parameters (use string equality instead of regex)
 }
 
 /// Global storage for registered routes - lock-free concurrent HashMap
@@ -40,8 +42,22 @@ thread_local! {
     static MOUNT_BASE: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
     
     /// Thread-local LRU cache for route matches (capacity 4 for typical 1-4 concurrent routes per thread)
-    static ROUTE_CACHE: std::cell::RefCell<lru::LruCache<String, HandlerMatch>> = 
+    static ROUTE_CACHE: std::cell::RefCell<lru::LruCache<u64, CachedHandlerMatch>> = 
         std::cell::RefCell::new(lru::LruCache::new(std::num::NonZeroUsize::new(4).unwrap()));
+}
+
+#[derive(Clone)]
+struct CachedHandlerMatch {
+    path: String,
+    matched: HandlerMatch,
+}
+
+/// Build a stable, allocation-free cache key from method + path.
+fn make_route_cache_key(method: &Method, path: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    method.as_str().hash(&mut hasher);
+    path.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Extract parameter names from a path pattern like "/users/<id>/posts/<post_id>"
@@ -95,12 +111,16 @@ pub fn register_route(method: Method, original_path: String, pattern: String, ha
     // Extract parameter names from the original path
     let param_names = extract_param_names(&full_path);
     
+    // Detect if this route is static (no parameters)
+    let is_static = param_names.is_empty();
+    
     let route_info = RouteInfo {
         method: method.clone(),
         original_path: full_path,
         pattern: Regex::new(&full_pattern).expect("Invalid route pattern"),
         param_names,
         handler,
+        is_static,
     };
     
     // Use DashMap's entry API for lock-free insertion
@@ -130,16 +150,19 @@ pub struct HandlerMatch {
 
 /// Find a handler for the given method and path, extracting parameters
 pub fn find_handler_with_params(method: &Method, path: &str) -> Option<HandlerMatch> {
-    // Create a cache key from method and path
-    let cache_key = format!("{} {}", method, path);
+    // Create an allocation-free cache key from method and path
+    let cache_key = make_route_cache_key(method, path);
     
     // Check thread-local cache first (lock-free, fast path)
     let cached = ROUTE_CACHE.with(|c| {
         c.borrow_mut().get(&cache_key).cloned()
     });
     
-    if let Some(matched) = cached {
-        return Some(matched);
+    if let Some(cached_entry) = cached {
+        // Guard against rare hash collisions by validating the path.
+        if cached_entry.path == path {
+            return Some(cached_entry.matched);
+        }
     }
     
     // Cache miss - perform actual route lookup
@@ -148,7 +171,10 @@ pub fn find_handler_with_params(method: &Method, path: &str) -> Option<HandlerMa
     // Store result in cache for future lookups
     if let Some(ref matched) = result {
         ROUTE_CACHE.with(|c| {
-            c.borrow_mut().put(cache_key, matched.clone());
+            c.borrow_mut().put(cache_key, CachedHandlerMatch {
+                path: path.to_string(),
+                matched: matched.clone(),
+            });
         });
     }
     
@@ -160,6 +186,18 @@ fn find_handler_with_params_uncached(method: &Method, path: &str) -> Option<Hand
     // Use DashMap's get() for lock-free concurrent read access
     if let Some(method_routes_ref) = ROUTES.get(method) {
         for route_info in method_routes_ref.iter() {
+            // FAST PATH: Static routes use direct string equality (skip regex entirely)
+            if route_info.is_static {
+                if path == route_info.original_path {
+                    return Some(HandlerMatch {
+                        handler: route_info.handler.clone(),
+                        params: HashMap::new(),
+                    });
+                }
+                continue;
+            }
+            
+            // SLOW PATH: Parameterized routes require regex matching
             if let Some(_captures) = route_info.pattern.captures(path) {
                 // Extract parameter values
                 let mut params = HashMap::new();
