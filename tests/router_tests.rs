@@ -131,8 +131,8 @@ fn test_parameterized_route_and_query_parsing_together() {
     let query = Query::from_uri(&uri);
 
     assert_eq!(matched.params.get("id"), Some(&"42".to_string()));
-    assert_eq!(query.get("expand"), Some(&"true".to_string()));
-    assert_eq!(query.get("lang"), Some(&"en".to_string()));
+    assert_eq!(query.get("expand"), Some("true".to_string()));
+    assert_eq!(query.get("lang"), Some("en".to_string()));
 }
 
 // ============ HTTP Method Dispatch Tests ============

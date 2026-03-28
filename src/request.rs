@@ -281,6 +281,7 @@ pub async fn extract_body(req: hyper::Request<Incoming>) -> Result<(hyper::Reque
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
 
     // ============ Query Parameter Parsing Tests ============
 
@@ -291,9 +292,9 @@ mod tests {
             .unwrap();
         let query = Query::from_uri(&uri);
 
-        assert_eq!(query.get("id"), Some(&"42".to_string()));
-        assert_eq!(query.get("name"), Some(&"John Doe".to_string()));
-        assert_eq!(query.get("email"), Some(&"test@example.com".to_string()));
+        assert_eq!(query.get("id"), Some("42".to_string()));
+        assert_eq!(query.get("name"), Some("John Doe".to_string()));
+        assert_eq!(query.get("email"), Some("test@example.com".to_string()));
         assert!(query.has("id"));
         assert_eq!(query.get_or("missing", "fallback"), "fallback");
     }
@@ -303,8 +304,8 @@ mod tests {
         let uri: hyper::Uri = "/search?q=rust&malformed&lang=en".parse().unwrap();
         let query = Query::from_uri(&uri);
 
-        assert_eq!(query.get("q"), Some(&"rust".to_string()));
-        assert_eq!(query.get("lang"), Some(&"en".to_string()));
+        assert_eq!(query.get("q"), Some("rust".to_string()));
+        assert_eq!(query.get("lang"), Some("en".to_string()));
         assert!(!query.has("malformed"));
     }
 
@@ -314,7 +315,7 @@ mod tests {
         let query = Query::from_uri(&uri);
 
         // HashMap collection semantics keep the most recent value for duplicate keys.
-        assert_eq!(query.get("tag"), Some(&"ml".to_string()));
+        assert_eq!(query.get("tag"), Some("ml".to_string()));
     }
 
     // ============ Body Parsing Tests ============
@@ -322,14 +323,14 @@ mod tests {
     #[test]
     fn body_json_and_form_parsing() {
         let json_body = Body {
-            data: br#"{"count":3,"enabled":true}"#.to_vec(),
+            data: Bytes::from_static(br#"{"count":3,"enabled":true}"#),
         };
         let parsed: serde_json::Value = json_body.json().unwrap();
         assert_eq!(parsed["count"], 3);
         assert_eq!(parsed["enabled"], true);
 
         let form_body = Body {
-            data: b"name=John%20Doe&role=admin".to_vec(),
+            data: Bytes::from_static(b"name=John%20Doe&role=admin"),
         };
         let form = form_body.form().unwrap();
         assert_eq!(form.get("name"), Some(&"John Doe".to_string()));
@@ -339,7 +340,7 @@ mod tests {
     #[test]
     fn body_form_ignores_malformed_pairs() {
         let form_body = Body {
-            data: b"name=John&malformed&role=admin".to_vec(),
+            data: Bytes::from_static(b"name=John&malformed&role=admin"),
         };
 
         let form = form_body.form().unwrap();
@@ -350,12 +351,12 @@ mod tests {
 
     #[test]
     fn body_empty_and_len_reflect_payload_size() {
-        let empty = Body { data: Vec::new() };
+        let empty = Body { data: Bytes::new() };
         assert!(empty.is_empty());
         assert_eq!(empty.len(), 0);
 
         let non_empty = Body {
-            data: b"abc".to_vec(),
+            data: Bytes::from_static(b"abc"),
         };
         assert!(!non_empty.is_empty());
         assert_eq!(non_empty.len(), 3);
@@ -366,12 +367,12 @@ mod tests {
     #[test]
     fn body_reports_utf8_and_json_errors() {
         let invalid_utf8 = Body {
-            data: vec![0xff, 0xfe, 0xfd],
+            data: Bytes::from(vec![0xff, 0xfe, 0xfd]),
         };
         assert!(invalid_utf8.as_str().is_err());
 
         let bad_json = Body {
-            data: br#"{"count":}"#.to_vec(),
+            data: Bytes::from_static(br#"{"count":}"#),
         };
         assert!(bad_json.json::<serde_json::Value>().is_err());
     }
