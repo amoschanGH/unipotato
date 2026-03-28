@@ -1,6 +1,7 @@
 mod routes;
 pub mod handlers;
 pub mod training_state;
+pub mod timing;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;

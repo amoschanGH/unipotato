@@ -20,6 +20,11 @@ use crate::training_state::{
     InferenceResult, TrainingConfig, TrainingControlFlags, TrainingMetrics, TrainingState,
     TrainingStatus,
 };
+use crate::timing::{
+    start_request, record_body_read_done, record_json_parse_done,
+    record_spawn_block_enter, record_spawn_block_acquired, record_inference_done,
+    record_response_serialize_done, record_response_send
+};
 
 // ============================================================================
 // Training Implementation Using rustpy-ml
@@ -678,16 +683,24 @@ pub async fn load_model(_req: Request) -> Response {
 
 #[post("/infer-drawing")]
 pub async fn infer_drawing(req: Request) -> Response {
+    start_request();
+
     let body = match req.into_body().await {
         Ok(b) => match b.as_str() {
-            Ok(s) => s.to_string(),
+            Ok(s) => {
+                record_body_read_done();
+                s.to_string()
+            },
             Err(_) => return text("Invalid UTF-8 in request body".to_string()),
         },
         Err(e) => return text(format!("Failed to read body: {}", e)),
     };
 
     let payload: InferDrawingRequest = match serde_json::from_str(&body) {
-        Ok(c) => c,
+        Ok(c) => {
+            record_json_parse_done();
+            c
+        },
         Err(e) => {
             return json(ErrorResponse {
                 error: format!("Parse error: {}", e),
@@ -714,7 +727,7 @@ pub async fn infer_drawing(req: Request) -> Response {
 
     let state = get_state();
     
-    let (model_source, model_data) = {
+    let model_source = {
         let st = lock_state(&state);
 
         if !st.model_loaded {
@@ -729,7 +742,7 @@ pub async fn infer_drawing(req: Request) -> Response {
             });
         }
 
-        (st.model_source.clone(), st.model_data.clone().unwrap())
+        st.model_source.clone()
     };
 
     let pixels_json = match serde_json::to_string(&payload.pixels) {
@@ -752,6 +765,18 @@ pub async fn infer_drawing(req: Request) -> Response {
         };
 
         if !has_trainer {
+            let model_data = {
+                let st = lock_state(&state);
+                match &st.model_data {
+                    Some(bytes) => bytes.clone(),
+                    None => {
+                        return json(ErrorResponse {
+                            error: "No model bytes available".to_string(),
+                        });
+                    }
+                }
+            };
+
             let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model_data);
             let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
 
@@ -768,8 +793,12 @@ pub async fn infer_drawing(req: Request) -> Response {
     }
 
     let infer_cmd = format!("trainer.infer_from_pixels({})", pixels_json);
+    record_spawn_block_enter();
     let infer_result = tokio::task::spawn_blocking(move || {
-        python!(-> (i64, f64, Vec<f64>), infer_cmd.as_str())
+        record_spawn_block_acquired();
+        let result = python!(-> (i64, f64, Vec<f64>), infer_cmd.as_str());
+        record_inference_done();
+        result
     }).await;
 
     let prediction = match infer_result {
@@ -787,7 +816,10 @@ pub async fn infer_drawing(req: Request) -> Response {
 
     let mut st = lock_state(&state);
     st.last_inference = Some(prediction.clone());
-    json(prediction)
+    record_response_serialize_done();
+    let response = json(prediction);
+    record_response_send();
+    response
 }
 
 // ============================================================================
