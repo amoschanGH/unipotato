@@ -278,6 +278,15 @@ mod tests {
         assert!(!query.has("malformed"));
     }
 
+    #[test]
+    fn query_duplicate_keys_last_value_wins() {
+        let uri: hyper::Uri = "/items?tag=rust&tag=web&tag=ml".parse().unwrap();
+        let query = Query::from_uri(&uri);
+
+        // HashMap collection semantics keep the most recent value for duplicate keys.
+        assert_eq!(query.get("tag"), Some(&"ml".to_string()));
+    }
+
     // ============ Body Parsing Tests ============
 
     #[test]
@@ -295,6 +304,31 @@ mod tests {
         let form = form_body.form().unwrap();
         assert_eq!(form.get("name"), Some(&"John Doe".to_string()));
         assert_eq!(form.get("role"), Some(&"admin".to_string()));
+    }
+
+    #[test]
+    fn body_form_ignores_malformed_pairs() {
+        let form_body = Body {
+            data: b"name=John&malformed&role=admin".to_vec(),
+        };
+
+        let form = form_body.form().unwrap();
+        assert_eq!(form.get("name"), Some(&"John".to_string()));
+        assert_eq!(form.get("role"), Some(&"admin".to_string()));
+        assert!(!form.contains_key("malformed"));
+    }
+
+    #[test]
+    fn body_empty_and_len_reflect_payload_size() {
+        let empty = Body { data: Vec::new() };
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let non_empty = Body {
+            data: b"abc".to_vec(),
+        };
+        assert!(!non_empty.is_empty());
+        assert_eq!(non_empty.len(), 3);
     }
 
     // ============ Body Error Handling Tests ============

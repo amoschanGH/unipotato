@@ -52,6 +52,25 @@ fn test_mount_prefix() {
     assert!(routes.iter().any(|r| r.path == "/api/mounted_test"));
 }
 
+#[test]
+fn test_nested_mount_inner_scope_overrides_outer_base() {
+    mount("/api", || {
+        mount("/v1", || {
+            let path = "/health";
+            register_route(
+                Method::GET,
+                path.to_string(),
+                simple_pattern(path),
+                make_handler("ok"),
+            );
+        });
+    });
+
+    let routes = collect_routes();
+    assert!(routes.iter().any(|r| r.path == "/v1/health"));
+    assert!(!routes.iter().any(|r| r.path == "/api/v1/health"));
+}
+
 // ============ Router Error Response Tests ============
 
 #[test]
@@ -80,6 +99,20 @@ fn test_parameterized_route_match_and_param_extraction() {
     let matched = find_handler_with_params(&Method::GET, "/users/42/posts/9").expect("expected route match");
     assert_eq!(matched.params.get("id"), Some(&"42".to_string()));
     assert_eq!(matched.params.get("post_id"), Some(&"9".to_string()));
+}
+
+#[test]
+fn test_parameterized_route_keeps_url_encoded_segment_verbatim() {
+    register_route(
+        Method::GET,
+        "/files/<name>".to_string(),
+        "^/files/[^/]+$".to_string(),
+        make_handler("matched"),
+    );
+
+    let matched = find_handler_with_params(&Method::GET, "/files/hello%20world")
+        .expect("expected route match");
+    assert_eq!(matched.params.get("name"), Some(&"hello%20world".to_string()));
 }
 
 // ============ HTTP Method Dispatch Tests ============
