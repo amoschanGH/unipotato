@@ -253,3 +253,131 @@ impl Default for Router {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hyper::Method;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    // ============ Test Helpers ============
+
+    fn reset_routes() {
+        get_routes().lock().unwrap().clear();
+        clear_mount_base();
+    }
+
+    fn next_test_path(prefix: &str) -> String {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        format!("/{prefix}_{id}")
+    }
+
+    fn test_handler(body: &'static str) -> Handler {
+        Arc::new(move |_req| {
+            Box::pin(async move {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(body.to_string())
+                    .unwrap()
+            })
+        })
+    }
+
+    // ============ Parameter Extraction Tests ============
+
+    #[test]
+    fn extract_param_names_handles_static_and_dynamic_segments() {
+        assert_eq!(extract_param_names("/users/<id>"), vec!["id".to_string()]);
+        assert_eq!(
+            extract_param_names("/users/<uid>/posts/<pid>"),
+            vec!["uid".to_string(), "pid".to_string()]
+        );
+        assert!(extract_param_names("/users/static").is_empty());
+    }
+
+    #[test]
+    fn extract_param_values_matches_segment_positions() {
+        let values = extract_param_values("/users/<uid>/posts/<pid>", "/users/42/posts/9");
+        assert_eq!(values, vec!["42".to_string(), "9".to_string()]);
+
+        let none = extract_param_values("/static/path", "/static/path");
+        assert!(none.is_empty());
+    }
+
+    // ============ Path Building & Mount Tests ============
+
+    #[test]
+    fn build_full_path_respects_mount_base() {
+        assert_eq!(build_full_path("", "/users"), "/users");
+        assert_eq!(build_full_path("/api", "/users"), "/api/users");
+    }
+
+    #[test]
+    fn mount_sets_and_clears_base_path() {
+        reset_routes();
+        assert_eq!(get_mount_base(), "");
+
+        mount("/api", || {
+            assert_eq!(get_mount_base(), "/api");
+        });
+
+        assert_eq!(get_mount_base(), "");
+    }
+
+    #[test]
+    fn register_route_applies_mount_base_to_path() {
+        reset_routes();
+
+        mount("/api", || {
+            register_route(
+                Method::GET,
+                "/users/<id>".to_string(),
+                "^/users/[^/]+$".to_string(),
+                test_handler("mounted"),
+            );
+        });
+
+        let found = find_handler_with_params(&Method::GET, "/api/users/7").expect("mounted route should match");
+        assert_eq!(found.params.get("id"), Some(&"7".to_string()));
+    }
+
+    // ============ Route Matching & Dispatch Tests ============
+
+    #[test]
+    fn find_handler_with_params_extracts_named_params() {
+        reset_routes();
+
+        register_route(
+            Method::GET,
+            "/users/<id>".to_string(),
+            "^/users/[^/]+$".to_string(),
+            test_handler("ok"),
+        );
+
+        let found = find_handler_with_params(&Method::GET, "/users/123").expect("route should match");
+        assert_eq!(found.params.get("id"), Some(&"123".to_string()));
+    }
+
+    #[test]
+    fn find_handler_with_params_respects_http_method() {
+        reset_routes();
+
+        let path = next_test_path("method_guard");
+        let pattern = format!("^{}$", regex::escape(&path));
+        register_route(Method::GET, path.clone(), pattern, test_handler("get"));
+
+        assert!(find_handler_with_params(&Method::POST, &path).is_none());
+        assert!(find_handler_with_params(&Method::GET, &path).is_some());
+    }
+
+    // ============ Router Error Response Tests ============
+
+    #[test]
+    fn router_error_helpers_return_expected_status_codes() {
+        assert_eq!(Router::not_found().status(), StatusCode::NOT_FOUND);
+        assert_eq!(Router::internal_error("boom").status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(Router::method_not_allowed().status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+}

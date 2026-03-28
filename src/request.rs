@@ -247,3 +247,68 @@ pub async fn extract_body(req: hyper::Request<Incoming>) -> Result<(hyper::Reque
     let req = hyper::Request::from_parts(parts, ());
     Ok((req, body))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ============ Query Parameter Parsing Tests ============
+
+    #[test]
+    fn query_parses_and_decodes_values() {
+        let uri: hyper::Uri = "/users?id=42&name=John%20Doe&email=test%40example.com"
+            .parse()
+            .unwrap();
+        let query = Query::from_uri(&uri);
+
+        assert_eq!(query.get("id"), Some(&"42".to_string()));
+        assert_eq!(query.get("name"), Some(&"John Doe".to_string()));
+        assert_eq!(query.get("email"), Some(&"test@example.com".to_string()));
+        assert!(query.has("id"));
+        assert_eq!(query.get_or("missing", "fallback"), "fallback");
+    }
+
+    #[test]
+    fn query_ignores_malformed_pairs_without_equals() {
+        let uri: hyper::Uri = "/search?q=rust&malformed&lang=en".parse().unwrap();
+        let query = Query::from_uri(&uri);
+
+        assert_eq!(query.get("q"), Some(&"rust".to_string()));
+        assert_eq!(query.get("lang"), Some(&"en".to_string()));
+        assert!(!query.has("malformed"));
+    }
+
+    // ============ Body Parsing Tests ============
+
+    #[test]
+    fn body_json_and_form_parsing() {
+        let json_body = Body {
+            data: br#"{"count":3,"enabled":true}"#.to_vec(),
+        };
+        let parsed: serde_json::Value = json_body.json().unwrap();
+        assert_eq!(parsed["count"], 3);
+        assert_eq!(parsed["enabled"], true);
+
+        let form_body = Body {
+            data: b"name=John%20Doe&role=admin".to_vec(),
+        };
+        let form = form_body.form().unwrap();
+        assert_eq!(form.get("name"), Some(&"John Doe".to_string()));
+        assert_eq!(form.get("role"), Some(&"admin".to_string()));
+    }
+
+    // ============ Body Error Handling Tests ============
+
+    #[test]
+    fn body_reports_utf8_and_json_errors() {
+        let invalid_utf8 = Body {
+            data: vec![0xff, 0xfe, 0xfd],
+        };
+        assert!(invalid_utf8.as_str().is_err());
+
+        let bad_json = Body {
+            data: br#"{"count":}"#.to_vec(),
+        };
+        assert!(bad_json.json::<serde_json::Value>().is_err());
+    }
+}
