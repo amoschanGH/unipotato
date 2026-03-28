@@ -1,4 +1,4 @@
-use unipotato::{handler, get, Request, Response, Unipotato};
+use unipotato::{handler, get, routes, Request, Response, Unipotato};
 
 #[get("/health")]
 pub async fn health(_req: Request) -> Response {
@@ -7,5 +7,5 @@ pub async fn health(_req: Request) -> Response {
 
 fn main() {
     println!("Starting latency health server on http://127.0.0.1:8080");
-    Unipotato::launch(8080).start();
+    Unipotato::launch(8080).mount("/", routes![self::health]).start();
 }

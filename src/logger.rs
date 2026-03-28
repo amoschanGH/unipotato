@@ -1,4 +1,5 @@
 use std::time::SystemTime;
+use std::sync::{Mutex, OnceLock};
 
 // ANSI Color codes
 pub const RESET: &str = "\x1b[0m";
@@ -44,11 +45,31 @@ pub fn should_log_http() -> bool {
     }
 }
 
+fn stdout_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn stderr_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+pub fn print_stdout(message: String) {
+    let _guard = stdout_lock().lock().unwrap();
+    println!("{}", message);
+}
+
+pub fn print_stderr(message: String) {
+    let _guard = stderr_lock().lock().unwrap();
+    eprintln!("{}", message);
+}
+
 #[macro_export]
 macro_rules! log_info {
     ($($arg:tt)*) => {{
         let timestamp = $crate::logger::get_timestamp();
-        println!(
+        $crate::logger::print_stdout(format!(
             "{}[INFO]{} {}[{}]{} {}",
             $crate::logger::BRIGHT_CYAN,
             $crate::logger::RESET,
@@ -56,7 +77,7 @@ macro_rules! log_info {
             timestamp,
             $crate::logger::RESET,
             format!($($arg)*)
-        );
+        ));
     }};
 }
 
@@ -64,7 +85,7 @@ macro_rules! log_info {
 macro_rules! log_success {
     ($($arg:tt)*) => {{
         let timestamp = $crate::logger::get_timestamp();
-        println!(
+        $crate::logger::print_stdout(format!(
             "{}✓ [SUCCESS]{} {}[{}]{} {}",
             $crate::logger::BRIGHT_GREEN,
             $crate::logger::RESET,
@@ -72,7 +93,7 @@ macro_rules! log_success {
             timestamp,
             $crate::logger::RESET,
             format!($($arg)*)
-        );
+        ));
     }};
 }
 
@@ -80,7 +101,7 @@ macro_rules! log_success {
 macro_rules! log_warning {
     ($($arg:tt)*) => {{
         let timestamp = $crate::logger::get_timestamp();
-        println!(
+        $crate::logger::print_stdout(format!(
             "{}⚠ [WARNING]{} {}[{}]{} {}",
             $crate::logger::BRIGHT_YELLOW,
             $crate::logger::RESET,
@@ -88,7 +109,7 @@ macro_rules! log_warning {
             timestamp,
             $crate::logger::RESET,
             format!($($arg)*)
-        );
+        ));
     }};
 }
 
@@ -96,7 +117,7 @@ macro_rules! log_warning {
 macro_rules! log_error {
     ($($arg:tt)*) => {{
         let timestamp = $crate::logger::get_timestamp();
-        eprintln!(
+        $crate::logger::print_stderr(format!(
             "{}✗ [ERROR]{} {}[{}]{} {}",
             $crate::logger::BRIGHT_RED,
             $crate::logger::RESET,
@@ -104,7 +125,7 @@ macro_rules! log_error {
             timestamp,
             $crate::logger::RESET,
             format!($($arg)*)
-        );
+        ));
     }};
 }
 
@@ -112,7 +133,7 @@ macro_rules! log_error {
 macro_rules! log_debug {
     ($($arg:tt)*) => {{
         let timestamp = $crate::logger::get_timestamp();
-        println!(
+        $crate::logger::print_stdout(format!(
             "{}[DEBUG]{} {}[{}]{} {}",
             $crate::logger::MAGENTA,
             $crate::logger::RESET,
@@ -120,7 +141,7 @@ macro_rules! log_debug {
             timestamp,
             $crate::logger::RESET,
             format!($($arg)*)
-        );
+        ));
     }};
 }
 
@@ -129,24 +150,21 @@ macro_rules! log_request {
     ($method:expr, $path:expr) => {{
         if $crate::logger::should_log_http() {
             let timestamp = $crate::logger::get_timestamp();
-            println!();
-            println!("{}╔════════════════════════════════════════════════════════════════╗{}", 
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}║{} {}→ API REQUEST{} {}[{}]{}                                       {}║{}", 
+            $crate::logger::print_stdout(format!(
+                "\n{}╔════════════════════════════════════════════════════════════════╗{}\n{}║{} {}→ API REQUEST{} {}[{}]{}                                       {}║{}\n{}║{} Method: {}{:<54}{} {}║{}\n{}║{} Path:   {}{:<54}{} {}║{}\n{}╚════════════════════════════════════════════════════════════════╝{}",
+                $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BRIGHT_CYAN, $crate::logger::RESET,
                 $crate::logger::GRAY, timestamp, $crate::logger::RESET,
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}║{} Method: {}{:<54}{} {}║{}", 
+                $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BRIGHT_YELLOW, format!("{}", $method), $crate::logger::RESET,
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}║{} Path:   {}{:<54}{} {}║{}", 
+                $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::WHITE, $path, $crate::logger::RESET,
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}╚════════════════════════════════════════════════════════════════╝{}", 
-                $crate::logger::BLUE, $crate::logger::RESET);
+                $crate::logger::BLUE, $crate::logger::RESET,
+                $crate::logger::BLUE, $crate::logger::RESET
+            ));
         }
     }};
 }
@@ -166,24 +184,21 @@ macro_rules! log_response {
                 $crate::logger::CYAN
             };
             
-            println!("{}╔════════════════════════════════════════════════════════════════╗{}", 
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}║{} {}← API RESPONSE{} {}[{}]{}                                      {}║{}", 
+            $crate::logger::print_stdout(format!(
+                "{}╔════════════════════════════════════════════════════════════════╗{}\n{}║{} {}← API RESPONSE{} {}[{}]{}                                      {}║{}\n{}║{} Status: {}{:<54}{} {}║{}\n{}║{} Path:   {}{:<54}{} {}║{}\n{}╚════════════════════════════════════════════════════════════════╝{}\n",
+                $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BRIGHT_CYAN, $crate::logger::RESET,
                 $crate::logger::GRAY, timestamp, $crate::logger::RESET,
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}║{} Status: {}{:<54}{} {}║{}", 
+                $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BLUE, $crate::logger::RESET,
                 status_color, format!("{}", $status), $crate::logger::RESET,
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}║{} Path:   {}{:<54}{} {}║{}", 
+                $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::BLUE, $crate::logger::RESET,
                 $crate::logger::WHITE, $path, $crate::logger::RESET,
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!("{}╚════════════════════════════════════════════════════════════════╝{}", 
-                $crate::logger::BLUE, $crate::logger::RESET);
-            println!();
+                $crate::logger::BLUE, $crate::logger::RESET,
+                $crate::logger::BLUE, $crate::logger::RESET
+            ));
         }
     }};
 }
@@ -191,17 +206,20 @@ macro_rules! log_response {
 #[macro_export]
 macro_rules! log_section {
     ($title:expr) => {{
-        println!();
-        println!("{}════════════════════ {} ════════════════════{}", 
-            $crate::logger::CYAN, $title, $crate::logger::RESET);
+        $crate::logger::print_stdout(format!(
+            "\n{}════════════════════ {} ════════════════════{}",
+            $crate::logger::CYAN, $title, $crate::logger::RESET
+        ));
     }};
 }
 
 #[macro_export]
 macro_rules! log_divider {
     () => {{
-        println!("{}────────────────────────────────────────────────────────────────{}", 
-            $crate::logger::GRAY, $crate::logger::RESET);
+        $crate::logger::print_stdout(format!(
+            "{}────────────────────────────────────────────────────────────────{}",
+            $crate::logger::GRAY, $crate::logger::RESET
+        ));
     }};
 }
 

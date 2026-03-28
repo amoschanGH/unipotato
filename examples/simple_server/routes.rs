@@ -5,6 +5,7 @@ pub fn setup_routes(app: Unipotato) -> Unipotato {
     app.mount("/", routes![
         root::index,
         root::about,
+        root::health,
     ])
     .mount("/api", routes![
         api::get_users,

@@ -1,4 +1,5 @@
-use unipotato::{Request, Response, handler::html, get};
+use unipotato::{Request, Response, handler::{html, json}, get};
+use crate::models::ApiResponse;
 
 #[get("/")]
 pub async fn index(_req: Request) -> Response {
@@ -204,4 +205,12 @@ pub async fn index(_req: Request) -> Response {
 #[get("/about")]
 pub async fn about(_req: Request) -> Response {
     html("<h1>About</h1><p>This is a simple CRUD app with JSON storage</p><a href='/'>Back</a>")
+}
+
+#[get("/health")]
+pub async fn health(_req: Request) -> Response {
+    json(ApiResponse {
+        status: "ok".to_string(),
+        message: "Server is running".to_string(),
+    })
 }

@@ -108,10 +108,22 @@ impl Unipotato {
             
             tokio::task::spawn(async move {
                 if let Err(err) = Self::serve_connection(io).await {
-                    log_error!("Error serving connection: {:?}", err);
+                    if Self::is_benign_connection_error(&err) {
+                        log_debug!("Client closed connection: {:?}", err);
+                    } else {
+                        log_error!("Error serving connection: {:?}", err);
+                    }
                 }
             });
         }
+    }
+
+    fn is_benign_connection_error(err: &hyper::Error) -> bool {
+        let message = err.to_string().to_ascii_lowercase();
+        message.contains("incompletemessage")
+            || message.contains("connection closed before message completed")
+            || message.contains("connection reset by peer")
+            || message.contains("broken pipe")
     }
 
     /// Serve a single HTTP connection
