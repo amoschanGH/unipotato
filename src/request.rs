@@ -2,6 +2,7 @@ use hyper::body::Incoming;
 use http_body_util::BodyExt;
 use std::collections::HashMap;
 use serde::de::DeserializeOwned;
+use bytes::Bytes;
 
 /// Custom Request wrapper that includes path parameters
 pub struct Request {
@@ -88,11 +89,14 @@ impl Request {
     }
 }
 
-/// Query parameter parser for URL queries
-pub struct Query(HashMap<String, String>);
+/// Query parameter parser for URL queries - uses lazy evaluation to avoid parsing if unused
+pub struct Query {
+    raw_query: Option<String>,
+    parsed: std::cell::RefCell<Option<HashMap<String, String>>>,
+}
 
 impl Query {
-    /// Parse query parameters from a URI
+    /// Parse query parameters from a URI (lazy evaluation - only parses on first access)
     /// 
     /// # Example
     /// ```ignore
@@ -101,36 +105,60 @@ impl Query {
     /// let query = Query::from_uri(req.uri());
     /// ```
     pub fn from_uri(uri: &hyper::Uri) -> Self {
-        let params = uri.query()
-            .map(Self::parse_query_string)
-            .unwrap_or_default();
-        
-        Query(params)
+        let raw_query = uri.query().map(|s| s.to_string());
+        Query {
+            raw_query,
+            parsed: std::cell::RefCell::new(None),
+        }
     }
 
-    /// Get a query parameter value
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.0.get(key)
+    /// Get a query parameter value (parses query string on first access, returns owned String)
+    pub fn get(&self, key: &str) -> Option<String> {
+        self.ensure_parsed();
+        self.parsed.borrow()
+            .as_ref()
+            .and_then(|p| p.get(key).cloned())
     }
 
     /// Get a query parameter with a default value
     pub fn get_or(&self, key: &str, default: &str) -> String {
-        self.0.get(key)
-            .cloned()
+        self.ensure_parsed();
+        self.parsed.borrow()
+            .as_ref()
+            .and_then(|p| p.get(key).cloned())
             .unwrap_or_else(|| default.to_string())
     }
 
-    /// Check if a query parameter exists
+    /// Check if a query parameter exists (parses on first access)
     pub fn has(&self, key: &str) -> bool {
-        self.0.contains_key(key)
+        self.ensure_parsed();
+        if let Some(params) = self.parsed.borrow().as_ref() {
+            params.contains_key(key)
+        } else {
+            false
+        }
     }
 
-    /// Get all query parameters
-    pub fn all(&self) -> &HashMap<String, String> {
-        &self.0
+    /// Get all query parameters (parses query string on first access)
+    pub fn all(&self) -> HashMap<String, String> {
+        self.ensure_parsed();
+        self.parsed.borrow()
+            .as_ref()
+            .cloned()
+            .unwrap_or_default()
     }
 
     // === Private Helpers ===
+
+    /// Ensure query string is parsed (only parses once, on first access)
+    fn ensure_parsed(&self) {
+        if self.parsed.borrow().is_none() {
+            if let Some(raw_query) = &self.raw_query {
+                let params = Self::parse_query_string(raw_query);
+                *self.parsed.borrow_mut() = Some(params);
+            }
+        }
+    }
 
     fn parse_query_string(query: &str) -> HashMap<String, String> {
         query.split('&')
@@ -154,18 +182,20 @@ impl Query {
     }
 }
 
-/// HTTP request body parser
+/// HTTP request body parser - uses Bytes for zero-copy allocation
 pub struct Body {
-    data: Vec<u8>,
+    data: Bytes,
 }
 
 impl Body {
-    /// Read body from incoming request
+    /// Read body from incoming request with optimized zero-copy buffering
     pub async fn from_incoming(incoming: Incoming) -> Result<Self, String> {
         let collected = incoming.collect().await
             .map_err(|e| format!("Failed to read body: {}", e))?;
         
-        let data = collected.to_bytes().to_vec();
+        // Use to_bytes() directly instead of converting to Vec then back to Bytes
+        // This avoids unnecessary allocations and provides reference-counted memory
+        let data = collected.to_bytes();
         Ok(Body { data })
     }
 

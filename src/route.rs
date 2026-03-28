@@ -1,7 +1,11 @@
 use hyper::{Response, Method, body::Incoming, StatusCode};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use std::collections::HashMap;
 use regex::Regex;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use smallvec::SmallVec;
+use memchr::memchr;
 
 /// Type alias for async request handlers - now uses crate::request::Request
 pub type Handler = Arc<
@@ -28,54 +32,69 @@ struct RouteInfo {
     handler: Handler,
 }
 
-/// Global storage for registered routes
-static ROUTES: OnceLock<Mutex<HashMap<Method, Vec<RouteInfo>>>> = OnceLock::new();
-
-fn get_routes() -> &'static Mutex<HashMap<Method, Vec<RouteInfo>>> {
-    ROUTES.get_or_init(|| Mutex::new(HashMap::new()))
-}
+/// Global storage for registered routes - lock-free concurrent HashMap
+static ROUTES: Lazy<DashMap<Method, Vec<RouteInfo>>> = Lazy::new(DashMap::new);
 
 thread_local! {
     /// Thread-local storage for mount base path
     static MOUNT_BASE: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
+    
+    /// Thread-local LRU cache for route matches (capacity 4 for typical 1-4 concurrent routes per thread)
+    static ROUTE_CACHE: std::cell::RefCell<lru::LruCache<String, HandlerMatch>> = 
+        std::cell::RefCell::new(lru::LruCache::new(std::num::NonZeroUsize::new(4).unwrap()));
 }
 
 /// Extract parameter names from a path pattern like "/users/<id>/posts/<post_id>"
+/// Uses SmallVec to avoid heap allocation for typical 1-3 parameters
 fn extract_param_names(path: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut chars = path.chars().peekable();
+    // SmallVec avoids heap allocation for typical cases (1-4 params)
+    let mut names: SmallVec<[String; 4]> = SmallVec::new();
+    let bytes = path.as_bytes();
+    let mut i = 0;
     
-    while let Some(c) = chars.next() {
-        if c == '<' {
-            let mut name = String::new();
-            while let Some(inner) = chars.next() {
-                if inner == '>' {
-                    break;
-                }
-                name.push(inner);
+    while let Some(pos) = memchr(b'<', &bytes[i..]) {
+        i += pos + 1;
+        let mut name = String::new();
+        
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == '>' {
+                break;
             }
-            if !name.is_empty() {
-                names.push(name);
-            }
+            name.push(c);
+            i += 1;
         }
+        
+        if !name.is_empty() {
+            names.push(name);
+        }
+        i += 1;
     }
-    names
+    
+    names.into_vec()
 }
 
 /// Register a new route with pattern matching support
 pub fn register_route(method: Method, original_path: String, pattern: String, handler: Handler) {
     let base = get_mount_base();
     let full_path = build_full_path(&base, &original_path);
+    
+    // Normalize pattern to ensure it has proper anchors for efficient regex matching
+    let normalized_pattern = normalize_pattern(&pattern);
+    
     let full_pattern = if base.is_empty() {
-        pattern
+        normalized_pattern
     } else {
-        format!("^{}{}$", regex::escape(&base), pattern.trim_start_matches('^').trim_end_matches('$'))
+        // Build pattern with base prefix, stripping and re-adding anchors
+        let pattern_without_anchors = normalized_pattern
+            .trim_start_matches('^')
+            .trim_end_matches('$');
+        format!("^{}{}$", regex::escape(&base), pattern_without_anchors)
     };
     
     // Extract parameter names from the original path
     let param_names = extract_param_names(&full_path);
     
-    let mut routes = get_routes().lock().unwrap();
     let route_info = RouteInfo {
         method: method.clone(),
         original_path: full_path,
@@ -83,10 +102,27 @@ pub fn register_route(method: Method, original_path: String, pattern: String, ha
         param_names,
         handler,
     };
-    routes.entry(method).or_insert_with(Vec::new).push(route_info);
+    
+    // Use DashMap's entry API for lock-free insertion
+    ROUTES.entry(method).or_insert_with(Vec::new).push(route_info);
+}
+
+/// Normalize a regex pattern to ensure it has proper anchors (^ and $) for efficient matching
+fn normalize_pattern(pattern: &str) -> String {
+    let trimmed = pattern.trim();
+    let needs_start = !trimmed.starts_with('^');
+    let needs_end = !trimmed.ends_with('$');
+    
+    match (needs_start, needs_end) {
+        (true, true) => format!("^{}$", trimmed),
+        (true, false) => format!("^{}", trimmed),
+        (false, true) => format!("{}$", trimmed),
+        (false, false) => trimmed.to_string(),
+    }
 }
 
 /// Result of finding a handler - includes the handler and extracted parameters
+#[derive(Clone)]
 pub struct HandlerMatch {
     pub handler: Handler,
     pub params: HashMap<String, String>,
@@ -94,9 +130,36 @@ pub struct HandlerMatch {
 
 /// Find a handler for the given method and path, extracting parameters
 pub fn find_handler_with_params(method: &Method, path: &str) -> Option<HandlerMatch> {
-    let routes = get_routes().lock().unwrap();
-    if let Some(method_routes) = routes.get(method) {
-        for route_info in method_routes {
+    // Create a cache key from method and path
+    let cache_key = format!("{} {}", method, path);
+    
+    // Check thread-local cache first (lock-free, fast path)
+    let cached = ROUTE_CACHE.with(|c| {
+        c.borrow_mut().get(&cache_key).cloned()
+    });
+    
+    if let Some(matched) = cached {
+        return Some(matched);
+    }
+    
+    // Cache miss - perform actual route lookup
+    let result = find_handler_with_params_uncached(method, path);
+    
+    // Store result in cache for future lookups
+    if let Some(ref matched) = result {
+        ROUTE_CACHE.with(|c| {
+            c.borrow_mut().put(cache_key, matched.clone());
+        });
+    }
+    
+    result
+}
+
+/// Internal function to find handler without cache (performs actual regex matching)
+fn find_handler_with_params_uncached(method: &Method, path: &str) -> Option<HandlerMatch> {
+    // Use DashMap's get() for lock-free concurrent read access
+    if let Some(method_routes_ref) = ROUTES.get(method) {
+        for route_info in method_routes_ref.iter() {
             if let Some(_captures) = route_info.pattern.captures(path) {
                 // Extract parameter values
                 let mut params = HashMap::new();
@@ -123,9 +186,11 @@ pub fn find_handler_with_params(method: &Method, path: &str) -> Option<HandlerMa
 }
 
 /// Extract parameter values by comparing the route pattern with the actual path
+/// Uses SmallVec to avoid heap allocation for typical 1-3 parameters
 fn extract_param_values(route_path: &str, actual_path: &str) -> Vec<String> {
-    let route_segments: Vec<&str> = route_path.split('/').collect();
-    let actual_segments: Vec<&str> = actual_path.split('/').collect();
+    // Use SmallVec to stack-allocate common case (1-4 segments)
+    let route_segments: SmallVec<[&str; 8]> = route_path.split('/').collect();
+    let actual_segments: SmallVec<[&str; 8]> = actual_path.split('/').collect();
     
     let mut values = Vec::new();
     
@@ -157,10 +222,11 @@ pub fn mount(base: &str, routes_fn: impl FnOnce()) {
 
 /// Collect all registered routes for inspection
 pub fn collect_routes() -> Vec<Route> {
-    let routes = get_routes().lock().unwrap();
     let mut result = Vec::new();
     
-    for (_method, route_infos) in routes.iter() {
+    // Iterate through all methods in the DashMap (lock-free read)
+    for method_routes_ref in ROUTES.iter() {
+        let (_method, route_infos) = method_routes_ref.pair();
         for route_info in route_infos {
             result.push(Route {
                 method: route_info.method.clone(),
@@ -265,7 +331,7 @@ mod tests {
     // ============ Test Helpers ============
 
     fn reset_routes() {
-        get_routes().lock().unwrap().clear();
+        ROUTES.clear();
         clear_mount_base();
     }
 
