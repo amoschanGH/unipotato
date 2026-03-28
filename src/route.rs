@@ -41,9 +41,12 @@ thread_local! {
     /// Thread-local storage for mount base path
     static MOUNT_BASE: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
     
-    /// Thread-local LRU cache for route matches (capacity 4 for typical 1-4 concurrent routes per thread)
+    /// Thread-local LRU cache for route matches.
+    ///
+    /// Capacity 32 reduces eviction churn for larger per-thread working sets
+    /// while keeping memory overhead low.
     static ROUTE_CACHE: std::cell::RefCell<lru::LruCache<u64, CachedHandlerMatch>> = 
-        std::cell::RefCell::new(lru::LruCache::new(std::num::NonZeroUsize::new(4).unwrap()));
+        std::cell::RefCell::new(lru::LruCache::new(std::num::NonZeroUsize::new(32).unwrap()));
 }
 
 #[derive(Clone)]
