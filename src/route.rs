@@ -198,7 +198,8 @@ fn find_handler_with_params_uncached(method: &Method, path: &str) -> Option<Hand
             }
             
             // SLOW PATH: Parameterized routes require regex matching
-            if let Some(_captures) = route_info.pattern.captures(path) {
+            // Use is_match to avoid unnecessary capture allocation.
+            if route_info.pattern.is_match(path) {
                 // Extract parameter values
                 let mut params = HashMap::new();
                 
