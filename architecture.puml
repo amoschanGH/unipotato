@@ -2,7 +2,7 @@
 !theme plain
 skinparam componentStyle rectangle
 
-title Unipotato: Web Framework Architecture
+title Unipotato: Web Framework Architecture (v0.1.3)
 
 package "User Application" {
   [Handler Functions] as Handlers
@@ -30,19 +30,47 @@ package "Unipotato Runtime" {
     [Unipotato Server] as Server
     [Connection Handler] as ConnHandler
     [Router] as Router
+    [Dev Reload Supervisor] as DevReload
     note right of Server
       • launch(port) → Unipotato
       • mount(base, routes) → Self
       • start() → !
     end note
+    note right of DevReload
+      UNIPOTATO_DEV_RELOAD=true
+      Auto-rebuild & restart on
+      file changes (400ms debounce)
+    end note
   }
   
   package "Route Management" {
-    [Route Registry] as Registry
-    [RouteInfo Storage] as RouteInfo
+    [Global Route Registry] as Registry
+    [DashMap<Method, Vec<RouteInfo>>] as RoutesStore
+    [Thread-local Mount Base] as MountBase
     [Handler Matcher] as Matcher
+    [Static Route Detector] as StaticDetector
+    [Pattern Normalizer] as PatternNorm
     note right of Registry
-      OnceLock<Mutex<HashMap<Method, Vec<RouteInfo>>>>
+      Lock-free concurrent HashMap
+      (DashMap replaces Mutex)
+    end note
+    note right of StaticDetector
+      Routes with no parameters
+      use direct string equality
+      instead of regex matching
+    end note
+  }
+  
+  package "Route Caching" {
+    [Thread-local LRU Cache] as RouteCache
+    [Cache Key Builder] as CacheKey
+    note right of RouteCache
+      Capacity: 32 entries per thread
+      Key: (Method, Path) hash
+    end note
+    note right of CacheKey
+      DefaultHasher(Method + Path)
+      Allocation-free cache key
     end note
   }
   
@@ -51,18 +79,24 @@ package "Unipotato Runtime" {
     [Query Parser] as Query
     [Body Parser] as Body
     [Parameter Extractor] as ParamExtractor
+    [Param Name Extractor] as ParamExtractor2
     note right of Request
       • param(name) → Option<&str>
       • param_as<T>(name) → Option<T>
-      • query() → Query
+      • query() → Query (lazy eval)
       • header(name) → Option<&str>
+    end note
+    note right of ParamExtractor2
+      SmallVec<[String; 4]>
+      (avoids heap for 1-4 params)
     end note
   }
   
   package "Response Helpers" {
+    [Text Response] as TextResp
     [JSON Response] as JsonResp
     [HTML Response] as HtmlResp
-    [Error Response] as ErrorResp
+    [Not Found Response] as ErrorResp
   }
   
   package "Logger" {
@@ -72,6 +106,8 @@ package "Unipotato Runtime" {
       - log_success
       - log_warning
       - log_error
+      - log_request
+      - log_response
     end note
   }
 }
@@ -84,13 +120,30 @@ package "Async Runtime" {
 
 package "HTTP Layer" {
   [Hyper Server] as Hyper
+  [Hyper Service] as Service
   [HTTP/1.1 Protocol] as HTTP
-  [Service Function] as Service
+}
+
+package "Utilities" {
+  [SmallVec] as SmallVecLib
+  [memchr] as MemchrLib
+  [Regex Engine] as RegexEngine
+  note right of SmallVecLib
+    Heap-free param storage
+  end note
 }
 
 package "Network" {
-  [TCP/IP] as NetworkTCP
+  [TCP/IP Stack] as NetworkTCP
   [Client Connections] as Clients
+}
+
+package "File System (Dev Only)" {
+  [Notify Watcher] as FileWatcher
+  note right of FileWatcher
+    Watches src/ for changes
+    Triggers reload on modification
+  end note
 }
 
 ' Macro processing flow
@@ -107,15 +160,19 @@ DeleteMacro --> MacroImpl
 PatchMacro --> MacroImpl
 
 MacroImpl --> PathConverter : uses
+MacroImpl --> PatternNorm : normalizes patterns
 MacroImpl --> Registry : generates registration code
 
-' Server initialization
+' Server initialization and dev reload
 RouteConfig --> Server : configures
+Server --> DevReload : checks DEV_RELOAD_ENV
+DevReload --> FileWatcher : watches on dev
+FileWatcher --> DevReload : triggers rebuild
 Server --> Registry : registers routes
 Server --> Tokio : runs on
 Server --> Router : uses
 
-' Request handling flow
+' Request handling with caching
 NetworkTCP --> Clients
 Clients --> TcpListener : connects to
 TcpListener --> Tokio : managed by
@@ -127,17 +184,26 @@ Hyper --> HTTP : implements
 Hyper --> Service : calls
 Service --> Router : routes request
 
-Router --> Matcher : finds handler
+Router --> RouteCache : checks cache first
+RouteCache --> CacheKey : builds key
+RouteCache --> Matcher : cache miss → match
+Matcher --> StaticDetector : check if static route
+StaticDetector --> RoutesStore : query routes
+Matcher --> RegexEngine : pattern matching
 Matcher --> Registry : queries
-Registry --> RouteInfo : returns
+Registry --> RoutesStore : retrieves routeinfo
 
 Router --> Request : wraps hyper::Request
-Request --> Query : parses query string
-Request --> Body : reads body
 Request --> ParamExtractor : extracts params
+ParamExtractor --> SmallVecLib : stores param names
+ParamExtractor --> MemchrLib : fast char search
+Request --> Query : parses query (lazy)
+Request --> Body : reads body async
+Request --> ParamExtractor2 : typed param access
 
 Router --> Handlers : invokes matched handler
-Handlers --> JsonResp : returns
+Handlers --> TextResp : returns
+Handlers --> JsonResp
 Handlers --> HtmlResp
 Handlers --> ErrorResp
 
@@ -149,14 +215,21 @@ note bottom of MacroImpl
   Zero runtime overhead
 end note
 
-note bottom of Registry
-  Thread-safe global storage
-  Mutex-protected HashMap
+note bottom of RoutesStore
+  Lock-free concurrent HashMap
+  DashMap for thread-safe access
+  No mutex contention
+end note
+
+note bottom of RouteCache
+  Per-thread LRU reduces
+  regex matching on hot paths
 end note
 
 note bottom of Tokio
   Multi-threaded work-stealing
   scheduler for async tasks
+  TcpIo integration via hyper-util
 end note
 
 @enduml
