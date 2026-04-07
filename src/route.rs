@@ -66,7 +66,6 @@ fn make_route_cache_key(method: &Method, path: &str) -> u64 {
 /// Extract parameter names from a path pattern like "/users/<id>/posts/<post_id>"
 /// Uses SmallVec to avoid heap allocation for typical 1-3 parameters
 fn extract_param_names(path: &str) -> Vec<String> {
-    // SmallVec avoids heap allocation for typical cases (1-4 params)
     let mut names: SmallVec<[String; 4]> = SmallVec::new();
     let bytes = path.as_bytes();
     let mut i = 0;

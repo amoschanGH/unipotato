@@ -16,7 +16,6 @@ pub async fn get_user(req: Request) -> Response {
     let db = get_db();
     let data = db.lock().unwrap();
     
-    // NEW: Use req.param() to get path parameter directly!
     let id: u32 = req.param_as("id").unwrap_or(0);
     log_info!("Fetching user with id: {}", id);
     
