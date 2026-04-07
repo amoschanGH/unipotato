@@ -28,5 +28,6 @@ pub fn setup_routes(app: Unipotato) -> Unipotato {
         train::upload_model,
         train::load_model,
         train::infer_drawing,
+        train::infer_drawing_pyo3,
     ])
 }

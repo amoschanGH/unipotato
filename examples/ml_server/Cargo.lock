@@ -536,6 +536,7 @@ dependencies = [
  "base64",
  "ctrlc",
  "once_cell",
+ "pyo3",
  "rustpy-ml",
  "serde",
  "serde_json",

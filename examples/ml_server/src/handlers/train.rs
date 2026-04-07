@@ -12,6 +12,8 @@ use unipotato::{
 
 use base64::Engine as _;
 use once_cell::sync::Lazy;
+use pyo3::Python;
+use pyo3::types::PyList;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
@@ -649,9 +651,33 @@ pub async fn load_model(_req: Request) -> Response {
         py_exec!(load_cmd.as_str())
     }).await;
 
-    if load_result.is_err() || load_result.unwrap().is_err() {
+    let load_outcome: std::result::Result<(), String> = match load_result {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(format!("Join error while loading checkpoint: {}", e)),
+    };
+
+    if let Err(e) = load_outcome {
         return json(ErrorResponse {
-            error: "Failed to load checkpoint".to_string(),
+            error: format!("Failed to load checkpoint: {}", e),
+        });
+    }
+
+    let load_cmd_pyo3 = format!(
+        "import __main__; __main__.trainer_pyo3 = MnistCnnTrainer.from_checkpoint_b64('{}')",
+        model_b64
+    );
+    let load_pyo3_result = tokio::task::spawn_blocking(move || {
+        py_exec!(load_cmd_pyo3.as_str())
+    }).await;
+
+    let load_pyo3_outcome: std::result::Result<(), String> = match load_pyo3_result {
+        Ok(inner) => inner.map_err(|e| e.to_string()),
+        Err(e) => Err(format!("Join error while loading PyO3 trainer: {}", e)),
+    };
+
+    if let Err(e) = load_pyo3_outcome {
+        return json(ErrorResponse {
+            error: format!("Failed to load PyO3 trainer: {}", e),
         });
     }
 
@@ -784,9 +810,14 @@ pub async fn infer_drawing(req: Request) -> Response {
                 py_exec!(load_cmd.as_str())
             }).await;
 
-            if load_result.is_err() || load_result.unwrap().is_err() {
+            let load_outcome: std::result::Result<(), String> = match load_result {
+                Ok(inner) => inner.map_err(|e| e.to_string()),
+                Err(e) => Err(format!("Join error while restoring trainer: {}", e)),
+            };
+
+            if let Err(e) = load_outcome {
                 return json(ErrorResponse {
-                    error: "Failed to restore trainer".to_string(),
+                    error: format!("Failed to restore trainer: {}", e),
                 });
             }
         }
@@ -808,6 +839,171 @@ pub async fn infer_drawing(req: Request) -> Response {
             probabilities: probs,
         },
         _ => {
+            return json(ErrorResponse {
+                error: "Inference failed".to_string(),
+            });
+        }
+    };
+
+    let mut st = lock_state(&state);
+    st.last_inference = Some(prediction.clone());
+    record_response_serialize_done();
+    let response = json(prediction);
+    record_response_send();
+    response
+}
+
+#[post("/infer-drawing-pyo3")]
+pub async fn infer_drawing_pyo3(req: Request) -> Response {
+    start_request();
+
+    let body = match req.into_body().await {
+        Ok(b) => match b.as_str() {
+            Ok(s) => {
+                record_body_read_done();
+                s.to_string()
+            },
+            Err(_) => return text("Invalid UTF-8 in request body".to_string()),
+        },
+        Err(e) => return text(format!("Failed to read body: {}", e)),
+    };
+
+    let payload: InferDrawingRequest = match serde_json::from_str(&body) {
+        Ok(c) => {
+            record_json_parse_done();
+            c
+        },
+        Err(e) => {
+            return json(ErrorResponse {
+                error: format!("Parse error: {}", e),
+            });
+        }
+    };
+
+    if payload.pixels.len() != 28 * 28 {
+        return json(ErrorResponse {
+            error: "pixels must contain exactly 784 normalized values".to_string(),
+        });
+    }
+
+    if let Err(e) = init_python_ml() {
+        return json(ErrorResponse {
+            error: format!("Failed to init Python: {}", e),
+        });
+    }
+    if let Err(e) = setup_trainer_class() {
+        return json(ErrorResponse {
+            error: format!("Failed to setup trainer class: {}", e),
+        });
+    }
+
+    let state = get_state();
+
+    {
+        let st = lock_state(&state);
+
+        if !st.model_loaded {
+            return json(ErrorResponse {
+                error: "No active model loaded. Train or load a model first.".to_string(),
+            });
+        }
+
+        if st.model_data.is_none() {
+            return json(ErrorResponse {
+                error: "No model bytes available".to_string(),
+            });
+        }
+    };
+
+    let has_pyo3_trainer_result = tokio::task::spawn_blocking(|| {
+        Python::with_gil(|py| {
+            match py.import("__main__") {
+                Ok(main_mod) => main_mod.getattr("trainer_pyo3").is_ok(),
+                Err(_) => false,
+            }
+        })
+    }).await;
+
+    let has_pyo3_trainer = match has_pyo3_trainer_result {
+        Ok(ok) => ok,
+        Err(_) => false,
+    };
+
+    if !has_pyo3_trainer {
+        let model_data = {
+            let st = lock_state(&state);
+            match &st.model_data {
+                Some(bytes) => bytes.clone(),
+                None => {
+                    return json(ErrorResponse {
+                        error: "No model bytes available".to_string(),
+                    });
+                }
+            }
+        };
+
+        let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model_data);
+        let load_cmd = format!(
+            "import __main__; __main__.trainer_pyo3 = MnistCnnTrainer.from_checkpoint_b64('{}')",
+            model_b64
+        );
+
+        let load_result = tokio::task::spawn_blocking(move || {
+            py_exec!(load_cmd.as_str())
+        }).await;
+
+        let load_outcome: std::result::Result<(), String> = match load_result {
+            Ok(inner) => inner.map_err(|e| e.to_string()),
+            Err(e) => Err(format!("Join error while restoring PyO3 trainer: {}", e)),
+        };
+
+        if let Err(e) = load_outcome {
+            return json(ErrorResponse {
+                error: format!("Failed to restore PyO3 trainer: {}", e),
+            });
+        }
+    }
+
+    let pixels = payload.pixels.clone();
+    record_spawn_block_enter();
+    let infer_result = tokio::task::spawn_blocking(move || {
+        record_spawn_block_acquired();
+        let result = Python::with_gil(|py| -> std::result::Result<InferenceResult, String> {
+            let globals = py
+                .import("__main__")
+                .map_err(|e| format!("Failed to import __main__: {}", e))?;
+            let trainer = globals
+                .getattr("trainer_pyo3")
+                .map_err(|e| format!("Trainer not initialized: {}", e))?;
+
+            let py_pixels = PyList::new(py, &pixels)
+                .map_err(|e| format!("Failed to build Python list: {}", e))?;
+            let output = trainer
+                .call_method1("infer_from_pixels", (py_pixels,))
+                .map_err(|e| format!("Inference call failed: {}", e))?;
+
+            let (pred, conf, probs): (i64, f64, Vec<f64>) = output
+                .extract()
+                .map_err(|e| format!("Failed to extract inference result: {}", e))?;
+
+            Ok(InferenceResult {
+                predicted_digit: pred.max(0) as usize,
+                confidence: conf,
+                probabilities: probs,
+            })
+        });
+        record_inference_done();
+        result
+    }).await;
+
+    let prediction = match infer_result {
+        Ok(Ok(value)) => value,
+        Ok(Err(e)) => {
+            return json(ErrorResponse {
+                error: format!("Inference failed: {}", e),
+            });
+        }
+        Err(_) => {
             return json(ErrorResponse {
                 error: "Inference failed".to_string(),
             });
