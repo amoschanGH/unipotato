@@ -17,10 +17,7 @@ struct PyResult {
 pub async fn run_script(_req: Request) -> Response {
     rustpy_ml::init().ok();
 
-    let outcome: rustpy_ml::Result<String> = (|| {
-        let val: String = python!(-> String, "str(1 + 1)")?;
-        Ok(val)
-    })();
+    let outcome: rustpy_ml::Result<String> = py_async!(-> String, "str(1 + 1)").await;
 
     match outcome {
         Ok(val) => json(PyResult { result: val }),

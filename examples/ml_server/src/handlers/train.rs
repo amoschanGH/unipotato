@@ -40,8 +40,8 @@ fn init_python_ml() -> rustpy_ml::Result<()> {
 }
 
 /// Define trainer class and helper functions in Python.
-fn setup_trainer_class() -> rustpy_ml::Result<()> {
-    py_exec!(
+async fn setup_trainer_class() -> rustpy_ml::Result<()> {
+    py_exec_async!(
         r#"
 import base64
 import io
@@ -296,7 +296,8 @@ def validate_checkpoint(model_b64):
     _ = MnistCnnTrainer.from_checkpoint_b64(model_b64)
     return True
 "#
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -616,7 +617,7 @@ pub async fn load_model(_req: Request) -> Response {
             error: format!("Failed to init Python: {}", e),
         });
     }
-    if let Err(e) = setup_trainer_class() {
+    if let Err(e) = setup_trainer_class().await {
         return json(ErrorResponse {
             error: format!("Failed to setup trainer class: {}", e),
         });
@@ -645,14 +646,9 @@ pub async fn load_model(_req: Request) -> Response {
     let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model_data);
     let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
 
-    let load_result = tokio::task::spawn_blocking(move || {
-        py_exec!(load_cmd.as_str())
-    }).await;
-
-    let load_outcome: std::result::Result<(), String> = match load_result {
-        Ok(inner) => inner.map_err(|e| e.to_string()),
-        Err(e) => Err(format!("Join error while loading checkpoint: {}", e)),
-    };
+    let load_outcome: std::result::Result<(), String> = py_exec_async!(load_cmd.as_str())
+        .await
+        .map_err(|e| e.to_string());
 
     if let Err(e) = load_outcome {
         return json(ErrorResponse {
@@ -660,14 +656,9 @@ pub async fn load_model(_req: Request) -> Response {
         });
     }
 
-    let valid_result = tokio::task::spawn_blocking(|| {
-        python!(-> bool, "trainer is not None")
-    }).await;
-
-    let valid = match valid_result {
-        Ok(Ok(ok)) => ok,
-        _ => false,
-    };
+    let valid = py_async!(-> bool, "trainer is not None")
+        .await
+        .unwrap_or(false);
 
     if !valid {
         return json(ErrorResponse {
@@ -724,7 +715,7 @@ pub async fn infer_drawing(req: Request) -> Response {
             error: format!("Failed to init Python: {}", e),
         });
     }
-    if let Err(e) = setup_trainer_class() {
+    if let Err(e) = setup_trainer_class().await {
         return json(ErrorResponse {
             error: format!("Failed to setup trainer class: {}", e),
         });
@@ -760,14 +751,9 @@ pub async fn infer_drawing(req: Request) -> Response {
     };
 
     if model_source.as_deref() == Some("trained") {
-        let has_trainer_result = tokio::task::spawn_blocking(|| {
-            python!(-> bool, "'trainer' in globals() and trainer is not None")
-        }).await;
-
-        let has_trainer = match has_trainer_result {
-            Ok(Ok(ok)) => ok,
-            _ => false,
-        };
+        let has_trainer = py_async!(-> bool, "'trainer' in globals() and trainer is not None")
+            .await
+            .unwrap_or(false);
 
         if !has_trainer {
             let model_data = {
@@ -785,14 +771,9 @@ pub async fn infer_drawing(req: Request) -> Response {
             let model_b64 = base64::engine::general_purpose::STANDARD.encode(&model_data);
             let load_cmd = format!("trainer = MnistCnnTrainer.from_checkpoint_b64('{}')", model_b64);
 
-            let load_result = tokio::task::spawn_blocking(move || {
-                py_exec!(load_cmd.as_str())
-            }).await;
-
-            let load_outcome: std::result::Result<(), String> = match load_result {
-                Ok(inner) => inner.map_err(|e| e.to_string()),
-                Err(e) => Err(format!("Join error while restoring trainer: {}", e)),
-            };
+            let load_outcome: std::result::Result<(), String> = py_exec_async!(load_cmd.as_str())
+                .await
+                .map_err(|e| e.to_string());
 
             if let Err(e) = load_outcome {
                 return json(ErrorResponse {
@@ -804,15 +785,12 @@ pub async fn infer_drawing(req: Request) -> Response {
 
     let infer_cmd = format!("trainer.infer_from_pixels({})", pixels_json);
     record_spawn_block_enter();
-    let infer_result = tokio::task::spawn_blocking(move || {
-        record_spawn_block_acquired();
-        let result = python!(-> (i64, f64, Vec<f64>), infer_cmd.as_str());
-        record_inference_done();
-        result
-    }).await;
+    record_spawn_block_acquired();
+    let infer_result = py_async!(-> (i64, f64, Vec<f64>), infer_cmd.as_str()).await;
+    record_inference_done();
 
     let prediction = match infer_result {
-        Ok(Ok((pred, conf, probs))) => InferenceResult {
+        Ok((pred, conf, probs)) => InferenceResult {
             predicted_digit: pred.max(0) as usize,
             confidence: conf,
             probabilities: probs,
@@ -845,29 +823,19 @@ async fn run_training_task(
 ) {
     let start_time = Instant::now();
 
-    // Run blockingPython initialization in blocking thread pool
-    let init_result = tokio::task::spawn_blocking(|| {
-        if let Err(e) = init_python_ml() {
-            return Err(format!(
+    if let Err(e) = init_python_ml() {
+        update_state_error(
+            &state,
+            format!(
                 "Failed to init Python. Ensure numpy/torch/torchvision are installed: {}",
                 e
-            ));
-        }
-
-        if let Err(e) = setup_trainer_class() {
-            return Err(format!("Failed to setup trainer class: {}", e));
-        }
-
-        Ok(())
-    }).await;
-
-    if let Err(e) = init_result {
-        update_state_error(&state, format!("Task spawn failed: {}", e));
+            ),
+        );
         return;
     }
 
-    if let Err(e) = init_result.unwrap() {
-        update_state_error(&state, e);
+    if let Err(e) = setup_trainer_class().await {
+        update_state_error(&state, format!("Failed to setup trainer class: {}", e));
         return;
     }
 
@@ -881,16 +849,8 @@ async fn run_training_task(
         config.batch_size
     );
 
-    let init_trainer_result = tokio::task::spawn_blocking(move || {
-        py_exec!(init_trainer.as_str())
-    }).await;
-
+    let init_trainer_result = py_exec_async!(init_trainer.as_str()).await;
     if let Err(e) = init_trainer_result {
-        update_state_error(&state, format!("Task spawn failed: {}", e));
-        return;
-    }
-
-    if let Err(e) = init_trainer_result.unwrap() {
         update_state_error(&state, format!("Trainer init failed: {}", e));
         return;
     }
@@ -904,17 +864,8 @@ async fn run_training_task(
             return;
         }
 
-        // Start epoch in blocking thread pool
-        let start_epoch_result = tokio::task::spawn_blocking(|| {
-            py_exec!("trainer.start_epoch()")
-        }).await;
-
+        let start_epoch_result = py_exec_async!("trainer.start_epoch()").await;
         if let Err(e) = start_epoch_result {
-            update_state_error(&state, format!("Task spawn failed: {}", e));
-            return;
-        }
-
-        if let Err(e) = start_epoch_result.unwrap() {
             update_state_error(&state, format!("Failed to start epoch {}: {}", epoch + 1, e));
             return;
         }
@@ -949,17 +900,8 @@ async fn run_training_task(
                 return;
             }
 
-            // Train one batch in blocking thread pool (allows pause/stop checks between batches)
-            let batch_result = tokio::task::spawn_blocking(|| {
-                python!(-> (bool, f64, f64), "trainer.train_next_batch()")
-            }).await;
-
-            if let Err(e) = batch_result {
-                update_state_error(&state, format!("Task spawn failed: {}", e));
-                return;
-            }
-
-            match batch_result.unwrap() {
+            let batch_result = py_async!(-> (bool, f64, f64), "trainer.train_next_batch()").await;
+            match batch_result {
                 Ok((done, train_loss, val_acc)) => {
                     if done {
                         let mut st = lock_state(&state);
@@ -985,17 +927,9 @@ async fn run_training_task(
         }
     }
 
-    // Finalize in blocking thread pool
-    let finalize_result = tokio::task::spawn_blocking(|| {
-        python!(-> (Vec<f64>, Vec<f64>, f64, f64, f64, String), "trainer.finalize()")
-    }).await;
+    let finalize_result = py_async!(-> (Vec<f64>, Vec<f64>, f64, f64, f64, String), "trainer.finalize()").await;
 
-    if let Err(e) = finalize_result {
-        update_state_error(&state, format!("Task spawn failed: {}", e));
-        return;
-    }
-
-    match finalize_result.unwrap() {
+    match finalize_result {
         Ok((train_losses, val_accs, best_loss, best_acc, test_acc, model_b64)) => {
             let mut st = lock_state(&state);
             st.status = TrainingStatus::Completed;

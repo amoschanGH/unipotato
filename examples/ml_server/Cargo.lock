@@ -783,14 +783,13 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rustpy-ml"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d1051dddbbf63742e76998876a2e74de12d6013119ea81a74a2a605ea27ff5"
 dependencies = [
  "anyhow",
  "inventory",
  "once_cell",
  "pyo3",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
